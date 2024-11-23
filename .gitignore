@@ -3,6 +3,8 @@ __pycache__/
 *.ipynb
 *log-*
 *.egg-info
+*.eggs
+build
 experiments/
 lightning_logs/
 tornado_baseline*

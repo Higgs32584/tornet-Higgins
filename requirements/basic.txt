@@ -1,8 +1,8 @@
 # Required to run basic loaders and visualization
 numpy~=1.26.0
-matplotlib
-pandas
-xarray
+matplotlib>=3.6.0,<4.0
+pandas>=1.5.0,<2.0
+xarray>=2023.1.0,<2024.0
 netCDF4~=1.6.0
 tqdm
 glob2
