@@ -10,6 +10,7 @@ The software/firmware is provided to you on an As-Is basis
 Delivered to the U.S. Government with Unlimited Rights, as defined in DFARS Part 252.227-7013 or 7014 (Feb 2014). Notwithstanding any copyright notice, U.S. Government rights in this work are defined by DFARS 252.227-7013 or DFARS 252.227-7014 as detailed above. Use of this work other than as specifically authorized by the U.S. Government may violate any copyrights that exist in this work.
 """
 import sys
+sys.path.append('../')  
 
 import os
 import numpy as np
@@ -19,14 +20,14 @@ import tensorflow as tf
 import keras
 
 from tornet.data.preprocess import get_shape
-from tornet.data.tf.loader import make_ds
+from tornet.data.tf.loader import make_tf_loader as make_ds
 from tornet.data.constants import ALL_VARIABLES
 
-from tornet.models.tf.losses import mae_loss
+from tornet.models.keras.losses import mae_loss
 
-from tornet.models.tf.cnn_baseline import build_model
+from tornet.models.keras.cnn_baseline import build_model
 
-from tornet.metrics.tf import metrics as tfm
+from tornet.metrics.keras import metrics as tfm
 
 from tornet.utils.general import make_exp_dir, make_callback_dirs
 
@@ -37,8 +38,8 @@ from_tfds = True
 DEFAULT_CONFIG={
     'epochs':10,
     'input_variables':ALL_VARIABLES,
-    'train_years':list(range(2013,2021)),
-    'val_years':list(range(2021,2023)),
+    'train_years':list(range(2013,2013)),
+    'val_years':list(range(2013,2013)),
     'batch_size':128,
     'model':'vgg',
     'start_filters':48,
@@ -93,23 +94,11 @@ def main(config):
     
     ## Set up data loaders
     weights={'wN':wN,'w0':w0,'w1':w1,'w2':w2,'wW':wW}
-    ds_train = make_ds(DATA_ROOT,
-                       'train',
-                       train_years,
-                       batch_size=batch_size,
-                       weights=weights,
-                       filter_warnings=filter_warn,
-                       include_az=False,
-                       from_tfds=from_tfds)
+    ds_train = make_ds(DATA_ROOT,'train',train_years,batch_size=batch_size,weights=weights,include_az=False,from_tfds=from_tfds)
 
-    ds_val = make_ds(DATA_ROOT,
-                     'train',
-                     val_years,
-                     batch_size=batch_size,
-                     weights=weights,
-                     filter_warnings=filter_warn,
-                     include_az=False,
-                     from_tfds=from_tfds)
+
+
+    ds_val = make_ds(DATA_ROOT,'train',val_years,batch_size=batch_size,weights=weights,include_az=False,from_tfds=from_tfds)
 
     ds_train=ds_train.with_options(data_opts)
     ds_val=ds_val.with_options(data_opts)

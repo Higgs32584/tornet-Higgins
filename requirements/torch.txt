@@ -1,8 +1,7 @@
 # Keras 3.0
-keras>=3.0
-
+keras~=3.0
 # Simple install
-torch
+torch~=2.1.0
 torchvision
 
 # Torch with cuda support
