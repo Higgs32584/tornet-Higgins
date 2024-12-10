@@ -21,7 +21,7 @@ import argparse
 import logging
 logging.basicConfig(level=logging.INFO)
 
-data_root=os.environ['TORNET_ROOT']
+data_root="C:/Users/mjhig/tornet_2013"
 logging.info('TORNET_ROOT='+data_root)
 
 def main():

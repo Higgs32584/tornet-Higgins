@@ -33,7 +33,7 @@ from tornet.metrics.keras import metrics as tfm
 from tornet.utils.general import make_exp_dir, make_callback_dirs
 
 EXP_DIR=os.environ.get('EXP_DIR','.')
-DATA_ROOT=os.environ['TORNET_ROOT']
+DATA_ROOT= "C:/Users/mjhig/tornet_2013"
 logging.info('TORNET_ROOT='+DATA_ROOT)
 
 DEFAULT_CONFIG={
