@@ -18,9 +18,18 @@ import tornet.data.tfds.tornet.tornet_dataset_builder
 logging.basicConfig(level=logging.INFO)
 
 # Environment Variables
-EXP_DIR = os.environ.get('EXP_DIR', '.')
+EXP_DIR = "s3://tornet-checkpoints"
 DATA_ROOT = '/home/ubuntu/tfds'
+TORNET_ROOT=DATA_ROOT
 TFDS_DATA_DIR = '/home/ubuntu/tfds'
+DATA_ROOT = "/home/ubuntu/tfds"
+TFDS_DATA_DIR = "/home/ubuntu/tfds"
+os.environ['TORNET_ROOT']= DATA_ROOT
+os.environ['TFDS_DATA_DIR']=TFDS_DATA_DIR
+
+
+logging.info(f'TORNET_ROOT={DATA_ROOT}')
+
 
 logging.info(f'TORNET_ROOT={DATA_ROOT}')
 
@@ -93,18 +102,13 @@ def main(config):
 
     # Data Loaders
     dataloader_kwargs.update({'select_keys': input_variables + ['range_folded_mask', 'coordinates']})
-    from tensorflow.data.experimental import AUTOTUNE
-
+    import tensorflow_datasets as tfds
+    import tornet.data.tfds.tornet.tornet_dataset_builder
+    tfds.load("tornet", data_dir=TFDS_DATA_DIR)
 
     # Apply to Train and Validation Data
     ds_train = get_dataloader(dataloader, DATA_ROOT, train_years, "train", batch_size, weights, **dataloader_kwargs)
     ds_val = get_dataloader(dataloader, DATA_ROOT, val_years, "train", batch_size, weights, **dataloader_kwargs)
-
-
-
-
-
-
     
     x, _, _ = next(iter(ds_train))
     in_shapes = (None, None, get_shape(x)[-1])
