@@ -21,9 +21,15 @@ import argparse
 import logging
 logging.basicConfig(level=logging.INFO)
 
-data_root="C:/Users/mjhig/tornet_2013"
-logging.info('TORNET_ROOT='+data_root)
 
+TFDS_DATA_DIR="/home/ubuntu/tfds"
+EXP_DIR=os.environ.get('EXP_DIR','.')
+TORNET_ROOT=TFDS_DATA_DIR
+#TFDS_DATA_DIR=os.environ['TFDS_DATA_DIR']
+import tensorflow_datasets as tfds
+import tornet.data.tfds.tornet.tornet_dataset_builder # registers 'tornet'
+
+#logging.info('TORNET_ROOT='+TORNET_ROOT)
 def main():
 
     parser = argparse.ArgumentParser()
@@ -33,20 +39,12 @@ def main():
     parser.add_argument(
         "--dataloader",
         help='Which data loader to use for loading test data',
-        default="keras",
+        default="tensorflow-tfds",
         choices=["keras", "tensorflow", "tensorflow-tfds", "torch", "torch-tfds"],
     )
     args = parser.parse_args()
 
     trained_model = args.model_path
-    if trained_model is None:
-        # download model from hugging face
-        # alternatively, you can manually download the file
-        # from https://huggingface.co/tornet-ml/tornado_detector_baseline_v1
-        # and point to it using --model_path
-        from huggingface_hub import hf_hub_download
-        trained_model = hf_hub_download(repo_id="tornet-ml/tornado_detector_baseline_v1", 
-                                        filename="tornado_detector_baseline.keras")
         
     dataloader = args.dataloader
 
@@ -57,16 +55,17 @@ def main():
         logging.info('Using TFDS dataset location at '+os.environ['TFDS_DATA_DIR'])
     
     # load model
-    model = keras.saving.load_model(trained_model,compile=False)
-
+    model = keras.saving.load_model('/home/ubuntu/tornet-Higgins/tornado_detector_baseline.keras',compile=False)
+    print(model.summary())
     ## Set up data loader
+    import tensorflow_datasets as tfds
+    import tornet.data.tfds.tornet.tornet_dataset_builder # registers 'tornet'
     test_years = range(2013,2023)
-    ds_test = get_dataloader(dataloader, 
-                             data_root, 
-                             test_years, 
+    ds_test = get_dataloader(dataloader, TORNET_ROOT, test_years, 
                              "test", 
-                             64,
+                             128,
                              select_keys=list(model.input.keys()))
+    #ds_train = get_dataloader(dataloader, DATA_ROOT, train_years, "test", batch_size, weights, **dataloader_kwargs)
 
 
     # Compute various metrics
