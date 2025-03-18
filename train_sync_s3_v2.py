@@ -17,7 +17,7 @@ from tornet.utils.general import make_exp_dir, make_callback_dirs
 import tensorflow_datasets as tfds
 import tornet.data.tfds.tornet.tornet_dataset_builder
 
-logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.ERROR)
 
 # Environment Variables
 LOCAL_EXP_DIR = "/home/ubuntu/tornet-Higgins/tmp/tornet-checkpoints"  # Local storage
@@ -32,7 +32,7 @@ os.environ['TFDS_DATA_DIR'] = TFDS_DATA_DIR
 os.makedirs(LOCAL_EXP_DIR, exist_ok=True)
 
 logging.info(f'TORNET_ROOT={DATA_ROOT}')
-
+os.environ["TF_GPU_THREAD_MODE"] = "gpu_private" 
 # Enable GPU Memory Growth
 gpus = tf.config.experimental.list_physical_devices('GPU')
 if gpus:
@@ -185,8 +185,16 @@ def main(config):
     nn.compile(loss=loss, metrics=metrics, optimizer=opt)
 
     # Experiment Directory
-    expdir = make_exp_dir(exp_dir=config['exp_dir'], prefix=config['exp_name'])
+    expdir = LOCAL_EXP_DIR
     logging.info(f'expdir={expdir}')
+    import os
+
+    # List the checkpoint directory
+    logging.info(f"Checking contents of {LOCAL_EXP_DIR}...")
+    print(os.listdir(LOCAL_EXP_DIR))  # 🚨 See if the checkpoint is actually there
+    latest_checkpoint = tf.train.latest_checkpoint(LOCAL_EXP_DIR)
+    logging.info(f"✅ TensorFlow sees latest checkpoint as: {latest_checkpoint}")
+
 
     # Checkpoint Handling for Spot Instance
     checkpoint_path = os.path.join(expdir, "model_checkpoint_epoch_{epoch:03d}.keras")
@@ -196,19 +204,37 @@ def main(config):
         checkpoint_path, monitor='val_AUCPR', save_best_only=False, save_weights_only=False
     )
     early_stop_cb = keras.callbacks.EarlyStopping(monitor='val_AUCPR', patience=5, restore_best_weights=True)
+    csv_logger_cb = keras.callbacks.CSVLogger(os.path.join(LOCAL_EXP_DIR, "history.csv"), append=True)
+
     sync_cb = keras.callbacks.LambdaCallback(on_epoch_end=lambda epoch, logs: save_training_state(epoch + 1))
 
-    callbacks = [checkpoint_cb, early_stop_cb, sync_cb]
+    callbacks = [checkpoint_cb, early_stop_cb, csv_logger_cb,sync_cb]
 
-    # Train Model (Resuming from `last_epoch`)
-    history = nn.fit(
-        ds_train,
-        validation_data=ds_val,
-        initial_epoch=last_epoch,
-        epochs=epochs,
-        callbacks=callbacks,
-        verbose=1
-    )
+    checkpoints = sorted([f for f in os.listdir(LOCAL_EXP_DIR) if f.endswith(".keras")])
+
+    if checkpoints:
+        latest_checkpoint = os.path.join(LOCAL_EXP_DIR, checkpoints[-1])  # Load the most recent checkpoint
+        print("Loading:", latest_checkpoint)
+
+        # Load the model
+        nn = keras.models.load_model(latest_checkpoint)
+        print("Model successfully loaded!")
+    else:
+        print("No checkpoints found.")
+
+
+    @tf.function
+    def train_step():
+        history = nn.fit(
+            ds_train,
+            validation_data=ds_val,
+            initial_epoch=last_epoch,
+            epochs=epochs,
+            callbacks=callbacks,
+            verbose=1
+        )
+        return history
+    train_step()
 
     # Save the final trained model
     nn.save(FINAL_MODEL_PATH)

@@ -28,6 +28,15 @@ TORNET_ROOT=TFDS_DATA_DIR
 #TFDS_DATA_DIR=os.environ['TFDS_DATA_DIR']
 import tensorflow_datasets as tfds
 import tornet.data.tfds.tornet.tornet_dataset_builder # registers 'tornet'
+EXP_DIR = "."
+DATA_ROOT = '/home/ubuntu/tfds'
+TORNET_ROOT=DATA_ROOT
+TFDS_DATA_DIR = '/home/ubuntu/tfds'
+DATA_ROOT = "/home/ubuntu/tfds"
+TFDS_DATA_DIR = "/home/ubuntu/tfds"
+os.environ['TORNET_ROOT']= DATA_ROOT
+os.environ['TFDS_DATA_DIR']=TFDS_DATA_DIR
+
 
 #logging.info('TORNET_ROOT='+TORNET_ROOT)
 def main():
@@ -36,17 +45,11 @@ def main():
     parser.add_argument("--model_path",
                         help="Pretrained model to test (.keras)",
                         default=None)
-    parser.add_argument(
-        "--dataloader",
-        help='Which data loader to use for loading test data',
-        default="tensorflow-tfds",
-        choices=["keras", "tensorflow", "tensorflow-tfds", "torch", "torch-tfds"],
-    )
     args = parser.parse_args()
 
     trained_model = args.model_path
         
-    dataloader = args.dataloader
+    dataloader = "tensorflow-tfds"
 
     logging.info(f"Using {keras.config.backend()} backend")
     logging.info(f"Using {dataloader} dataloader")
@@ -55,7 +58,7 @@ def main():
         logging.info('Using TFDS dataset location at '+os.environ['TFDS_DATA_DIR'])
     
     # load model
-    model = keras.saving.load_model('/home/ubuntu/tornet-Higgins/vgg_block_500/checkpoints/tornadoDetector_078.keras',compile=False)
+    model = keras.saving.load_model(trained_model,compile=False)
 
     ## Set up data loader
     import tensorflow_datasets as tfds
@@ -63,18 +66,22 @@ def main():
     test_years = range(2013,2023)
     ds_test = get_dataloader(dataloader, TORNET_ROOT, test_years, 
                              "test", 
-                             64,
+                             128,
                              select_keys=list(model.input.keys()))
     #ds_train = get_dataloader(dataloader, DATA_ROOT, train_years, "test", batch_size, weights, **dataloader_kwargs)
 
 
     # Compute various metrics
-    from_logits=True
+    from_logits=False
     metrics = [ keras.metrics.AUC(from_logits=from_logits,name='AUC',num_thresholds=2000),
                 keras.metrics.AUC(from_logits=from_logits,curve='PR',name='AUCPR',num_thresholds=2000), 
-                tfm.BinaryAccuracy(from_logits=from_logits,name='BinaryAccuracy'), 
-                tfm.Precision(from_logits=from_logits,name='Precision'), 
-                tfm.Recall(from_logits=from_logits,name='Recall'),
+                tfm.BinaryAccuracy(from_logits,name='BinaryAccuracy'), 
+                tfm.TruePositives(from_logits,name='TruePositives'),
+                tfm.FalsePositives(from_logits,name='FalsePositives'), 
+                tfm.TrueNegatives(from_logits,name='TrueNegatives'),
+                tfm.FalseNegatives(from_logits,name='FalseNegatives'), 
+                tfm.Precision(from_logits,name='Precision'), 
+                tfm.Recall(from_logits,name='Recall'),
                 tfm.F1Score(from_logits=from_logits,name='F1')]
     model.compile(metrics=metrics)
 

@@ -51,7 +51,7 @@ def read_file(f: str,
             data[v]=ds[v].values[-n_frames:,:,:,:]
         
         # Various numeric metadata
-        data['range_folded_mask'] = ds['range_folded_mask'].values[-n_frames:,:,:,:].astype(np.float32) # only two channels for vel,width
+        data['range_folded_mask'] = ds['range_folded_mask'].values[-n_frames:,:,:,:].astype(np.float16) # only two channels for vel,width
         data['label'] = ds['frame_labels'].values[-n_frames:] # 1 if tornado, 0 otherwise
         data['category']=np.array([{'TOR':0,'NUL':1,'WRN':2}[ds.attrs['category']]],dtype=np.int64) # tornadic, null (random), or warning
         data['event_id']=np.array([int(ds.attrs['event_id'])],dtype=np.int64)

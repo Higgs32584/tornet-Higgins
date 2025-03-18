@@ -47,13 +47,15 @@ if gpus:
 strategy = tf.distribute.MirroredStrategy()
 
 logging.info(f"Number of devices: {strategy.num_replicas_in_sync}")
+from tensorflow.keras.mixed_precision import set_global_policy
+set_global_policy('mixed_float16')
 
 DEFAULT_CONFIG={
     'epochs':100,
     'input_variables':ALL_VARIABLES,
     'train_years':list(range(2013,2020)),
     'val_years':list(range(2020,2022)),
-    'batch_size':32,
+    'batch_size':16,
     'model':'efficientnet',
     'start_filters':32,
     'learning_rate':1e-4,

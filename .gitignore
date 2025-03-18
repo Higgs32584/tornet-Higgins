@@ -9,3 +9,7 @@ lightning_logs/
 tornado_baseline*
 tornet_baseline*
 tmp
+*.keras
+*.json
+*.csv
+*.v2

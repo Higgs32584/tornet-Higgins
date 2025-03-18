@@ -1,9 +1,9 @@
-import os
-import datetime
+import keras
 
-file_path = "/home/ubuntu/tornet-Higgins/tornet_baseline250308211618-None-None/tornadoDetector_001.keras"  # Replace with your file path
-timestamp = os.path.getmtime(file_path)  # Get last modified time
-last_modified = datetime.datetime.fromtimestamp(timestamp)
+model=keras.models.load_model("/home/ubuntu/tornet-Higgins/tornado_detector_baseline.keras")
+import tensorflow as tf
 
-print(f"Last modified: {last_modified}")
 
+
+
+print(model.summary())

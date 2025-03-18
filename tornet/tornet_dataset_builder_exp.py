@@ -41,9 +41,9 @@ def read_file(f: str, variables: List[str] = ALL_VARIABLES, n_frames: int = 4) -
 
         # Convert data to float32/uint8
         for v in variables:
-            data[v] = data[v].astype(np.float32)
+            data[v] = data[v].astype(np.float16)
 
-        data['range_folded_mask'] = data['range_folded_mask'].astype(np.float32)
+        data['range_folded_mask'] = data['range_folded_mask'].astype(np.float16)
         data['label'] = data['label'].astype(np.uint8)
         
         # Metadata extraction (use local variables to reduce attribute access time)
@@ -96,21 +96,21 @@ class Builder(tfds.core.GeneratorBasedBuilder):
     return self.dataset_info_from_configs(
         features=tfds.features.FeaturesDict({
             # These are the features of your dataset like images, labels ...
-            'DBZ': tfds.features.Tensor(shape=(4, 120, 240, 2),dtype=np.float32,encoding='zlib'),
-            'VEL': tfds.features.Tensor(shape=(4, 120, 240, 2),dtype=np.float32,encoding='zlib'),
-            'KDP': tfds.features.Tensor(shape=(4, 120, 240, 2),dtype=np.float32,encoding='zlib'),
-            'RHOHV': tfds.features.Tensor(shape=(4, 120, 240, 2),dtype=np.float32,encoding='zlib'),
-            'ZDR': tfds.features.Tensor(shape=(4, 120, 240, 2),dtype=np.float32,encoding='zlib'),
-            'WIDTH': tfds.features.Tensor(shape=(4, 120, 240, 2),dtype=np.float32,encoding='zlib'),
-            'range_folded_mask': tfds.features.Tensor(shape=(4, 120, 240, 2),dtype=np.float32,encoding='zlib'),
+            'DBZ': tfds.features.Tensor(shape=(4, 120, 240, 2),dtype=np.float16,encoding='zlib'),
+            'VEL': tfds.features.Tensor(shape=(4, 120, 240, 2),dtype=np.float16,encoding='zlib'),
+            'KDP': tfds.features.Tensor(shape=(4, 120, 240, 2),dtype=np.float16,encoding='zlib'),
+            'RHOHV': tfds.features.Tensor(shape=(4, 120, 240, 2),dtype=np.float16,encoding='zlib'),
+            'ZDR': tfds.features.Tensor(shape=(4, 120, 240, 2),dtype=np.float16,encoding='zlib'),
+            'WIDTH': tfds.features.Tensor(shape=(4, 120, 240, 2),dtype=np.float16,encoding='zlib'),
+            'range_folded_mask': tfds.features.Tensor(shape=(4, 120, 240, 2),dtype=np.float16,encoding='zlib'),
             'label': tfds.features.Tensor(shape=(4,),dtype=np.uint8),
             'category': tfds.features.Tensor(shape=(1,),dtype=np.int64),
             'event_id': tfds.features.Tensor(shape=(1,),dtype=np.int64),
             'ef_number': tfds.features.Tensor(shape=(1,),dtype=np.int64),
-            'az_lower': tfds.features.Tensor(shape=(1,),dtype=np.float32),
-            'az_upper': tfds.features.Tensor(shape=(1,),dtype=np.float32),
-            'rng_lower': tfds.features.Tensor(shape=(1,),dtype=np.float32),
-            'rng_upper': tfds.features.Tensor(shape=(1,),dtype=np.float32),
+            'az_lower': tfds.features.Tensor(shape=(1,),dtype=np.float16),
+            'az_upper': tfds.features.Tensor(shape=(1,),dtype=np.float16),
+            'rng_lower': tfds.features.Tensor(shape=(1,),dtype=np.float16),
+            'rng_upper': tfds.features.Tensor(shape=(1,),dtype=np.float16),
             'time': tfds.features.Tensor(shape=(4,),dtype=np.int64),
             'tornado_start_time': tfds.features.Tensor(shape=(1,),dtype=np.int64),
             'tornado_end_time': tfds.features.Tensor(shape=(1,),dtype=np.int64),
