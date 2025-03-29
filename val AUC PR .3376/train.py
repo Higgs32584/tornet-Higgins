@@ -44,25 +44,16 @@ np.random.seed(SEED)
 tf.random.set_seed(SEED)
 # Environment Variables
 DATA_ROOT = '/home/ubuntu/tfds'
+TORNET_ROOT=DATA_ROOT
 TFDS_DATA_DIR = DATA_ROOT
+EXP_DIR = "."
 os.environ['TORNET_ROOT'] = DATA_ROOT
 os.environ['TFDS_DATA_DIR'] = TFDS_DATA_DIR
-
-# Environment Variables
-EXP_DIR = "."
-DATA_ROOT = '/home/ubuntu/tfds'
-TORNET_ROOT=DATA_ROOT
-TFDS_DATA_DIR = '/home/ubuntu/tfds'
-DATA_ROOT = "/home/ubuntu/tfds"
-TFDS_DATA_DIR = "/home/ubuntu/tfds"
-os.environ['TORNET_ROOT']= DATA_ROOT
-os.environ['TFDS_DATA_DIR']=TFDS_DATA_DIR
 
 
 logging.info(f'TORNET_ROOT={DATA_ROOT}')
 
-
-def build_model(model:'wide_resnet',shape:Tuple[int]=(120,240,2),
+def build_model(model='wide_resnet',shape:Tuple[int]=(120,240,2),
                 c_shape:Tuple[int]=(120,240,2),
                 input_variables:List[str]=ALL_VARIABLES,
                 start_filters:int=64,
@@ -99,18 +90,36 @@ def build_model(model:'wide_resnet',shape:Tuple[int]=(120,240,2),
     if model == 'wide_resnet':
         x, c = wide_resnet_block(x, c, filters=start_filters, widen_factor=2, l2_reg=l2_reg,nconvs=3, drop_rate=dropout_rate)
         x, c = wide_resnet_block(x, c, filters=start_filters*2, widen_factor=2, l2_reg=l2_reg,nconvs=3, drop_rate=dropout_rate)
-        x, c = wide_resnet_block(x, c, filters=start_filters*3, widen_factor=2, l2_reg=l2_reg,nconvs=3, drop_rate=dropout_rate)
+        x, c = wide_resnet_block(x, c, filters=start_filters*4, widen_factor=2, l2_reg=l2_reg,nconvs=3, drop_rate=dropout_rate)
         x=se_block(x)
-    x = Conv2D(filters=512, kernel_size=1,
-                          kernel_regularizer=keras.regularizers.l2(l2_reg),
-                          activation='relu')(x)
-    x = Conv2D(filters=256, kernel_size=1,
-                          kernel_regularizer=keras.regularizers.l2(l2_reg),
-                          activation='relu')(x)
-    x = Conv2D(filters=1, kernel_size=1,name='heatmap')(x)
-        # Max in scene
-    output =GlobalMaxPooling2D()(x)
-        
+    # x = Conv2D(filters=512, kernel_size=1,
+    #                       kernel_regularizer=keras.regularizers.l2(l2_reg),
+    #                       activation='relu')(x)
+    # x = Conv2D(filters=256, kernel_size=1,
+    #                       kernel_regularizer=keras.regularizers.l2(l2_reg),
+    #                       activation='relu')(x)
+    # print(x)
+    # x = Conv2D(filters=1, kernel_size=1, name='heatmap')(x)
+    # def top_k_pooling(x, k=5):
+    #     # x: (batch, H, W, 1) → reshape to (batch, H×W)
+    #     x_flat = tf.reshape(x, [tf.shape(x)[0], -1])         # (batch, H×W)
+    #     topk = tf.nn.top_k(x_flat, k=k, sorted=False).values # (batch, k)
+    #     return tf.reduce_mean(topk, axis=1, keepdims=True)   # (batch, 1)
+    # x = keras.layers.Lambda(lambda t: top_k_pooling(t, k=5), output_shape=(1,), name='TopKPooling')(x)
+    # output = keras.layers.Activation('sigmoid')(x)    # Max in scene
+    # Generate attention weights
+    x = Conv2D(128, 3, padding='same', activation='relu')(x)
+    x = BatchNormalization()(x)
+    attention_map = Conv2D(1, 1, activation='sigmoid', name='attention_map')(x)  # shape (B, H, W, 1)
+    x_weighted = Multiply()([x, attention_map])
+
+    x_avg = GlobalAveragePooling2D()(x_weighted)
+    x_max = GlobalMaxPooling2D()(x_weighted)
+    x_concat = keras.layers.Concatenate()([x_avg, x_max])
+
+
+    x_dense = Dense(64, activation='relu')(x_concat)
+    output = Dense(1, activation='sigmoid', name='output')(x_dense)
     return keras.Model(inputs=inputs,outputs=output)
 
 def se_block(x, ratio=16, name=None):
@@ -190,7 +199,7 @@ if gpus:
 strategy = tf.distribute.MirroredStrategy()
 os.environ['TF_CUDNN_USE_AUTOTUNE'] = '0'
 
-tf.config.optimizer.set_jit(True)  # Enable XLA (Accelerated Linear Algebra)
+#tf.config.optimizer.set_jit(True)  # Enable XLA (Accelerated Linear Algebra)
 logging.info(f"Number of devices: {strategy.num_replicas_in_sync}")
 # Default Configuration
 DEFAULT_CONFIG={"epochs":100, 
@@ -199,15 +208,14 @@ DEFAULT_CONFIG={"epochs":100,
                 "val_years": [2021, 2022], "batch_size": 64
                 , "model": "wide_resnet", 
                 "start_filters": 48, 
-                "learning_rate": 1e-3, 
+                "learning_rate": 3e-4, 
                 "decay_steps": 1386, 
                 "decay_rate": 0.958,
                 "dropout_rate":0.1, 
-                "l2_reg": 1e-6, "wN": 1.0, "w0": 1.0, "w1": 1.0, "w2": 1.0, "wW": 1.0, "label_smooth": 0.1, 
+                "l2_reg": 1e-4, "wN": 0.25, "wW": 0.75, "w0": 3.0, "w1": 5.0, "w2": 8.0, "label_smooth": 0.1, 
                 "loss": "cce", "head": "maxpool", "exp_name": "tornado_baseline", "exp_dir": ".",
                   "dataloader": "tensorflow-tfds", 
                   "dataloader_kwargs": {"select_keys": ["DBZ", "VEL", "KDP", "RHOHV", "ZDR", "WIDTH", "range_folded_mask", "coordinates"]}}
-
 def main(config):
     # Gather all hyperparams
     epochs=config.get('epochs')
@@ -242,7 +250,7 @@ def main(config):
 
     # Apply to Train and Validation Data
     ds_train = get_dataloader(dataloader, DATA_ROOT, train_years, "train", batch_size, weights, **dataloader_kwargs)
-    ds_val = get_dataloader(dataloader, DATA_ROOT, val_years, "train", batch_size, weights, **dataloader_kwargs)
+    ds_val = get_dataloader(dataloader, DATA_ROOT, val_years, "train", batch_size, {'wN':1.0,'w0':1.0,'w1':1.0,'w2':1.0,'wW':1.0}, **dataloader_kwargs)
 
     x, _, _ = next(iter(ds_train))
     
@@ -250,21 +258,22 @@ def main(config):
     c_shapes = (None, None, x["coordinates"].shape[-1])
     nn = build_model(model=model,shape=in_shapes, c_shape=c_shapes, start_filters=start_filters, 
                          l2_reg=l2_reg, input_variables=input_variables,dropout_rate=dropout_rate)
-
+    print(nn.summary())
+    
     # Loss Function
     import tensorflow as tf
     from tensorflow.keras import backend as K
     # Optimizer with Learning Rate Decay
-    from_logits=True
-    from tensorflow.keras.losses import BinaryCrossentropy
+    from_logits=False
+    from tensorflow.keras.losses import BinaryCrossentropy,Tversky
 
-    loss = BinaryCrossentropy(from_logits=True)
+    loss = BinaryCrossentropy(from_logits=from_logits,label_smoothing=0.1)
     
     # Optimizer with Learnindg Rate Decay
 
     lr_schedule = CosineDecayRestarts(
         initial_learning_rate=1e-3,
-        first_decay_steps=2039,  # 1 epoch
+        first_decay_steps=2038,  # 1 epoch
         t_mul=2.0,               # each cycle doubles
         m_mul=0.9                # restart peak decays slightly
     )
@@ -276,9 +285,8 @@ def main(config):
         beta_2=0.999,
         epsilon=1e-7
     )
-    from_logits=False
     # Metrics (Optimize AUCPR)
-    metrics = [keras.metrics.AUC(from_logits=from_logits,curve='PR',name='AUCPR',num_thresholds=2000), 
+    metrics = [keras.metrics.AUC(from_logits=from_logits,curve='PR',name='AUCPR',num_thresholds=1000), 
                 tfm.BinaryAccuracy(from_logits,name='BinaryAccuracy'), 
                 tfm.TruePositives(from_logits,name='TruePositives'),
                 tfm.FalsePositives(from_logits,name='FalsePositives'), 
@@ -307,7 +315,9 @@ def main(config):
         keras.callbacks.ModelCheckpoint(checkpoint_name, monitor='val_AUCPR', save_best_only=False),
         keras.callbacks.CSVLogger(os.path.join(expdir, 'history.csv')),
         keras.callbacks.TerminateOnNaN(),
-        keras.callbacks.EarlyStopping(monitor='val_AUCPR', patience=3, mode='max', restore_best_weights=True),
+        keras.callbacks.EarlyStopping(monitor='val_AUCPR', patience=5, mode='max', restore_best_weights=True),
+        keras.callbacks.EarlyStopping(monitor='val_F1', patience=5, mode='max', restore_best_weights=True),
+
     ]
     
     # TensorBoard Logging

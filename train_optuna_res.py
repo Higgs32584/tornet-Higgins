@@ -18,18 +18,17 @@ from tornet.models.keras.layers import FillNaNs
 from tornet.models.keras.cnn_baseline import vgg_block,normalize
 from tornet.models.keras.layers import CoordConv2D, FillNaNs
 from tensorflow.keras.layers import (
-    Conv2D,
-    LayerNormalization,
-    GlobalAveragePooling2D,
     Dense,
-    Multiply,
-    Reshape,
     BatchNormalization,
     Add,
     Activation,
     MaxPool2D,
-    Dropout
+    Dropout,
+    Lambda,
+    Multiply,
+    GlobalAveragePooling2D
 )
+
 from keras.optimizers.schedules import CosineDecayRestarts
 
 logging.basicConfig(level=logging.INFO)
@@ -90,6 +89,14 @@ DEFAULT_CONFIG = {
     }
 
 }
+def se_block(x, ratio=16):
+    filters = x.shape[-1]
+    se = GlobalAveragePooling2D()(x)
+    se = Dense(filters // ratio, activation="relu")(se)
+    se = Dense(filters, activation="sigmoid")(se)
+    return Multiply()([x, se])
+
+
 def build_model(shape:Tuple[int]=(120,240,2),
                 c_shape:Tuple[int]=(120,240,2),
                 input_variables:List[str]=ALL_VARIABLES,
@@ -142,6 +149,9 @@ def build_model(shape:Tuple[int]=(120,240,2),
     output = keras.layers.GlobalMaxPooling2D()(x)
         
     return keras.Model(inputs=inputs,outputs=output)
+
+
+    
 def wide_resnet_block(x, c, filters=64, widen_factor=2, l2_reg=1e-6, drop_rate=0.0):
     """Wide ResNet Block with CoordConv2D"""
     shortcut_x, shortcut_c = x, c  # Skip connection
@@ -149,7 +159,7 @@ def wide_resnet_block(x, c, filters=64, widen_factor=2, l2_reg=1e-6, drop_rate=0
     # 3x3 CoordConv2D (Wider filters)
     x, c = CoordConv2D(filters=filters * widen_factor, kernel_size=3, padding="same",
                        kernel_regularizer=keras.regularizers.l2(l2_reg),
-                       activation='relu')([x, c])
+                       activation=None)([x, c])
     x = BatchNormalization()(x)
 
     # 3x3 CoordConv2D (Wider filters)
@@ -163,7 +173,10 @@ def wide_resnet_block(x, c, filters=64, widen_factor=2, l2_reg=1e-6, drop_rate=0
                                          kernel_regularizer=keras.regularizers.l2(l2_reg),
                                          activation=None)([shortcut_x, shortcut_c])
     
-    x = Add()([x, shortcut_x])  
+    x = se_block(x)
+
+    # Add Residual Connection
+    x = Add()([x, shortcut_x])
     x = Activation('relu')(x)
 
     # Pooling and dropout
@@ -177,19 +190,21 @@ def wide_resnet_block(x, c, filters=64, widen_factor=2, l2_reg=1e-6, drop_rate=0
 
 def objective(trial):
     config = DEFAULT_CONFIG.copy()
-    config["learning_rate"] = trial.suggest_float("learning_rate", 1e-6, 1e-3, log=True)
-    config["l2_reg"] = trial.suggest_float("l2_reg", .0003, .002, log=True)
-    config["start_filters"] = trial.suggest_int("start_filters", 64, 128, step=16)
-    config["weight_decay"] = trial.suggest_float("weight_decay", 1e-5, 1e-4d, log=True)
-    config["dropout_rate"] = trial.suggest_float("dropout_rate", 0.01, 0.15)
+    config["learning_rate"] = trial.suggest_float("learning_rate", 1e-5, 5e-3, log=True)
+    config["l2_reg"] = trial.suggest_float("l2_reg", 1e-6, 1e-3, log=True)
+    config["start_filters"] = trial.suggest_int("start_filters", 8, 64, step=8)
+    config["weight_decay"] = trial.suggest_float("weight_decay", 1e-6, 1e-3, log=True)
+    config["dropout_rate"] = trial.suggest_float("dropout_rate", 0.00, 0.15)
+    config["t_mul"] = trial.suggest_float("t_mul", 0.5, 3.00, log=True)
+    config["m_mul"] = trial.suggest_float("m_mul", 0.50, 2.00, log=True)
     config["weights"] = {
-        'wN': trial.suggest_float('wN', 0.05, 0.20, log=True),
-        'w0': trial.suggest_int('w0', 16.0, 66.0, log=True)*1.0,
-        'w1': trial.suggest_int('w1', 25.0, 100.0, log=True)*1.0,
-        'w2': trial.suggest_int('w2', 3.0, 10.0, log=True)*1.0,
-        'wW': trial.suggest_int('wW', 25.0, 100.0, log=True)*1.0
+        'wN': trial.suggest_float('wN', 0.01, 1.00, log=True),
+        'w0': trial.suggest_int('w0', 1.0, 10.0, log=True)*1.0,
+        'w1': trial.suggest_int('w1', 1.0, 10.0, log=True)*1.0,
+        'w2': trial.suggest_int('w2', 1.0, 10.0, log=True)*1.0,
+        'wW': trial.suggest_int('wW', 1.0, 10.0, log=True)*1.0
     }
-    config["first_decay_steps"] = trial.suggest_int("first_decay_steps", 5, 20)*1.0  # Controls decay restart interval
+    config["first_decay_steps"] = trial.suggest_int("first_decay_steps", 10, 200)*1.0  # Controls decay restart interval
     logging.info(f"Tuning with config: {config}")
     config["batch_size"] = 64
     # Load dataset
@@ -209,7 +224,7 @@ def objective(trial):
         l2_reg=config["l2_reg"], start_filters=config["start_filters"],dropout_rate=config["dropout_rate"]
     )
     loss = keras.losses.BinaryCrossentropy()
-    lr = CosineDecayRestarts(initial_learning_rate=config['learning_rate'], first_decay_steps=config["first_decay_steps"],  t_mul=2.0, m_mul=0.9)
+    lr = CosineDecayRestarts(initial_learning_rate=config['learning_rate'], first_decay_steps=config["first_decay_steps"],  t_mul=config["t_mul"], m_mul=config["m_mul"])
     opt = keras.optimizers.AdamW(learning_rate=lr, weight_decay=config['weight_decay'])
     from_logits=False
     metrics = [keras.metrics.AUC(from_logits=from_logits,curve='PR',name='AUCPR',num_thresholds=2000)]
@@ -245,7 +260,7 @@ def log_trial(trial, trial_results):
 
 if __name__ == '__main__':
     with strategy.scope():
-        study = optuna.create_study(direction='maximize', sampler=optuna.samplers.TPESampler(seed=SEED),pruner=optuna.pruners.MedianPruner())
+        study = optuna.create_study(direction='maximize', sampler=optuna.samplers.TPESampler(seed=SEED),pruner=optuna.pruners.HyperbandPruner())
         study.optimize(objective, n_trials=200)
 
     # Save best trial parameters

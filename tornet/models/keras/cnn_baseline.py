@@ -84,8 +84,6 @@ def build_model(shape:Tuple[int]=(120,240,2),
 
 
 
-
-
 def vgg_block(x,c, filters=64, ksize=3, n_convs=2, l2_reg=1e-6, drop_rate=0.0):
 
     for _ in range(n_convs):
@@ -93,7 +91,7 @@ def vgg_block(x,c, filters=64, ksize=3, n_convs=2, l2_reg=1e-6, drop_rate=0.0):
                           kernel_size=ksize,
                           kernel_regularizer=keras.regularizers.l2(l2_reg),
                           padding='same',
-                          activation='relu')([x,c])
+                          activation=None)([x,c])
     x = keras.layers.MaxPool2D(pool_size =2, strides =2, padding ='same')(x)
     c = keras.layers.MaxPool2D(pool_size =2, strides =2, padding ='same')(c)
     if drop_rate>0:

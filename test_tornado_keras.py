@@ -13,7 +13,7 @@ Delivered to the U.S. Government with Unlimited Rights, as defined in DFARS Part
 import os
 import keras
 import tqdm
-
+import tensorflow as tf
 from tornet.data.loader import get_dataloader
 from tornet.metrics.keras import metrics as tfm
 
@@ -36,6 +36,52 @@ DATA_ROOT = "/home/ubuntu/tfds"
 TFDS_DATA_DIR = "/home/ubuntu/tfds"
 os.environ['TORNET_ROOT']= DATA_ROOT
 os.environ['TFDS_DATA_DIR']=TFDS_DATA_DIR
+class FalseAlarmRate(tf.keras.metrics.Metric):
+    def __init__(self, name="false_alarm_rate", **kwargs):
+        super().__init__(name=name, **kwargs)
+        self.false_positives = self.add_weight(name="fp", initializer="zeros")
+        self.true_positives = self.add_weight(name="tp", initializer="zeros")
+        self.epsilon = 1e-7
+
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        y_pred = tf.cast(y_pred > 0.5, tf.float32)  # Binary predictions
+        y_true = tf.cast(y_true, tf.float32)
+
+        fp = tf.reduce_sum((1 - y_true) * y_pred)
+        tp = tf.reduce_sum(y_true * y_pred)
+
+        self.false_positives.assign_add(fp)
+        self.true_positives.assign_add(tp)
+
+    def result(self):
+        return self.false_positives / (self.false_positives + self.true_positives + self.epsilon)
+
+    def reset_states(self):
+        self.false_positives.assign(0)
+        self.true_positives.assign(0)
+
+class ThreatScore(tf.keras.metrics.Metric):
+    def __init__(self, name="threat_score", **kwargs):
+        super().__init__(name=name, **kwargs)
+        self.tp = self.add_weight(name="tp", initializer="zeros")
+        self.fp = self.add_weight(name="fp", initializer="zeros")
+        self.fn = self.add_weight(name="fn", initializer="zeros")
+        self.epsilon = 1e-7
+
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        y_pred = tf.cast(y_pred > 0.5, tf.float32)
+        y_true = tf.cast(y_true, tf.float32)
+        self.tp.assign_add(tf.reduce_sum(y_true * y_pred))
+        self.fp.assign_add(tf.reduce_sum((1 - y_true) * y_pred))
+        self.fn.assign_add(tf.reduce_sum(y_true * (1 - y_pred)))
+
+    def result(self):
+        return self.tp / (self.tp + self.fp + self.fn + self.epsilon)
+
+    def reset_states(self):
+        self.tp.assign(0)
+        self.fp.assign(0)
+        self.fn.assign(0)
 
 
 #logging.info('TORNET_ROOT='+TORNET_ROOT)
@@ -66,15 +112,15 @@ def main():
     test_years = range(2013,2023)
     ds_test = get_dataloader(dataloader, TORNET_ROOT, test_years, 
                              "test", 
-                             128,
+                             64,
                              select_keys=list(model.input.keys()))
     #ds_train = get_dataloader(dataloader, DATA_ROOT, train_years, "test", batch_size, weights, **dataloader_kwargs)
 
 
     # Compute various metrics
     from_logits=False
-    metrics = [ keras.metrics.AUC(from_logits=from_logits,name='AUC',num_thresholds=2000),
-                keras.metrics.AUC(from_logits=from_logits,curve='PR',name='AUCPR',num_thresholds=2000), 
+    metrics = [
+                keras.metrics.AUC(from_logits=from_logits,curve='PR',name='AUCPR',num_thresholds=1000), 
                 tfm.BinaryAccuracy(from_logits,name='BinaryAccuracy'), 
                 tfm.TruePositives(from_logits,name='TruePositives'),
                 tfm.FalsePositives(from_logits,name='FalsePositives'), 
@@ -82,7 +128,10 @@ def main():
                 tfm.FalseNegatives(from_logits,name='FalseNegatives'), 
                 tfm.Precision(from_logits,name='Precision'), 
                 tfm.Recall(from_logits,name='Recall'),
-                tfm.F1Score(from_logits=from_logits,name='F1')]
+                FalseAlarmRate(name='FalseAlarmRate'),
+                tfm.F1Score(from_logits=from_logits,name='F1'),
+                ThreatScore(name='ThreatScore')]
+    
     model.compile(metrics=metrics)
 
     scores = model.evaluate(ds_test) 

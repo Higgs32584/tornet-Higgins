@@ -99,7 +99,7 @@ def build_model(model:'wide_resnet',shape:Tuple[int]=(120,240,2),
     if model == 'wide_resnet':
         x, c = wide_resnet_block(x, c, filters=start_filters, widen_factor=2, l2_reg=l2_reg,nconvs=3, drop_rate=dropout_rate)
         x, c = wide_resnet_block(x, c, filters=start_filters*2, widen_factor=2, l2_reg=l2_reg,nconvs=3, drop_rate=dropout_rate)
-        x, c = wide_resnet_block(x, c, filters=start_filters*3, widen_factor=2, l2_reg=l2_reg,nconvs=3, drop_rate=dropout_rate)
+        x, c = wide_resnet_block(x, c, filters=start_filters*4, widen_factor=2, l2_reg=l2_reg,nconvs=3, drop_rate=dropout_rate)
         x=se_block(x)
     x = Conv2D(filters=512, kernel_size=1,
                           kernel_regularizer=keras.regularizers.l2(l2_reg),
@@ -109,7 +109,10 @@ def build_model(model:'wide_resnet',shape:Tuple[int]=(120,240,2),
                           activation='relu')(x)
     x = Conv2D(filters=1, kernel_size=1,name='heatmap')(x)
         # Max in scene
-    output =GlobalMaxPooling2D()(x)
+    max_out = GlobalMaxPooling2D()(x)
+    avg_out = GlobalAveragePooling2D()(x)
+    output = Add()([max_out, avg_out])
+
         
     return keras.Model(inputs=inputs,outputs=output)
 
@@ -140,7 +143,7 @@ def wide_resnet_block(x, c, filters=64, widen_factor=2, l2_reg=1e-6, drop_rate=0
         x, c = CoordConv2D(filters=filters * widen_factor, kernel_size=3, padding="same",
                         kernel_regularizer=keras.regularizers.l2(l2_reg),
                         activation=None)([x, c])
-        x = BatchNormalization()(x)
+        x = BatchNormalization(momentum=.95)(x)
     # Skip Connection
     shortcut_x, shortcut_c = CoordConv2D(filters=filters * widen_factor, kernel_size=1, padding="same",
                                          kernel_regularizer=keras.regularizers.l2(l2_reg),
@@ -190,20 +193,20 @@ if gpus:
 strategy = tf.distribute.MirroredStrategy()
 os.environ['TF_CUDNN_USE_AUTOTUNE'] = '0'
 
-tf.config.optimizer.set_jit(True)  # Enable XLA (Accelerated Linear Algebra)
+#tf.config.optimizer.set_jit(True)  # Enable XLA (Accelerated Linear Algebra)
 logging.info(f"Number of devices: {strategy.num_replicas_in_sync}")
 # Default Configuration
-DEFAULT_CONFIG={"epochs":100, 
+DEFAULT_CONFIG={"epochs":40, 
                 "input_variables": ["DBZ", "VEL", "KDP", "ZDR","RHOHV","WIDTH"], 
                 "train_years": [2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020], 
-                "val_years": [2021, 2022], "batch_size": 64
+                "val_years": [2021, 2022], "batch_size": 128
                 , "model": "wide_resnet", 
-                "start_filters": 48, 
+                "start_filters": 32, 
                 "learning_rate": 1e-3, 
-                "decay_steps": 1386, 
+                "decay_steps": 6114, 
                 "decay_rate": 0.958,
-                "dropout_rate":0.1, 
-                "l2_reg": 1e-6, "wN": 1.0, "w0": 1.0, "w1": 1.0, "w2": 1.0, "wW": 1.0, "label_smooth": 0.1, 
+                "dropout_rate":0.2, 
+                "l2_reg": 1e-3, "wN": .09, "w0": 10.0, "w1": 10.0, "w2": 10.0, "wW": 10.0, "label_smooth": 0.1, 
                 "loss": "cce", "head": "maxpool", "exp_name": "tornado_baseline", "exp_dir": ".",
                   "dataloader": "tensorflow-tfds", 
                   "dataloader_kwargs": {"select_keys": ["DBZ", "VEL", "KDP", "RHOHV", "ZDR", "WIDTH", "range_folded_mask", "coordinates"]}}
@@ -216,6 +219,7 @@ def main(config):
     dropout_rate=config.get('dropout_rate')
 
     lr=config.get('learning_rate')
+    decay_steps=config.get('decay_steps')
     l2_reg=config.get('l2_reg')
     wN=config.get('wN')
     w0=config.get('w0')
@@ -242,7 +246,7 @@ def main(config):
 
     # Apply to Train and Validation Data
     ds_train = get_dataloader(dataloader, DATA_ROOT, train_years, "train", batch_size, weights, **dataloader_kwargs)
-    ds_val = get_dataloader(dataloader, DATA_ROOT, val_years, "train", batch_size, weights, **dataloader_kwargs)
+    ds_val = get_dataloader(dataloader, DATA_ROOT, val_years, "train", batch_size, {'wN':1.0,'w0':1.0,'w1':1.0,'w2':1.0,'wW':1.0}, **dataloader_kwargs)
 
     x, _, _ = next(iter(ds_train))
     
@@ -250,7 +254,8 @@ def main(config):
     c_shapes = (None, None, x["coordinates"].shape[-1])
     nn = build_model(model=model,shape=in_shapes, c_shape=c_shapes, start_filters=start_filters, 
                          l2_reg=l2_reg, input_variables=input_variables,dropout_rate=dropout_rate)
-
+    print(nn.summary())
+    
     # Loss Function
     import tensorflow as tf
     from tensorflow.keras import backend as K
@@ -258,13 +263,13 @@ def main(config):
     from_logits=True
     from tensorflow.keras.losses import BinaryCrossentropy
 
-    loss = BinaryCrossentropy(from_logits=True)
+    loss = BinaryCrossentropy(from_logits=from_logits)
     
     # Optimizer with Learnindg Rate Decay
 
     lr_schedule = CosineDecayRestarts(
-        initial_learning_rate=1e-3,
-        first_decay_steps=2039,  # 1 epoch
+        initial_learning_rate=lr,
+        first_decay_steps=decay_steps,  # 1 epoch
         t_mul=2.0,               # each cycle doubles
         m_mul=0.9                # restart peak decays slightly
     )
@@ -276,9 +281,8 @@ def main(config):
         beta_2=0.999,
         epsilon=1e-7
     )
-    from_logits=False
     # Metrics (Optimize AUCPR)
-    metrics = [keras.metrics.AUC(from_logits=from_logits,curve='PR',name='AUCPR',num_thresholds=2000), 
+    metrics = [keras.metrics.AUC(from_logits=from_logits,curve='PR',name='AUCPR',num_thresholds=1000), 
                 tfm.BinaryAccuracy(from_logits,name='BinaryAccuracy'), 
                 tfm.TruePositives(from_logits,name='TruePositives'),
                 tfm.FalsePositives(from_logits,name='FalsePositives'), 
@@ -307,7 +311,7 @@ def main(config):
         keras.callbacks.ModelCheckpoint(checkpoint_name, monitor='val_AUCPR', save_best_only=False),
         keras.callbacks.CSVLogger(os.path.join(expdir, 'history.csv')),
         keras.callbacks.TerminateOnNaN(),
-        keras.callbacks.EarlyStopping(monitor='val_AUCPR', patience=3, mode='max', restore_best_weights=True),
+        keras.callbacks.EarlyStopping(monitor='val_AUCPR', patience=5, mode='max', restore_best_weights=True),
     ]
     
     # TensorBoard Logging

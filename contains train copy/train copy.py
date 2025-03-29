@@ -47,6 +47,30 @@ DATA_ROOT = '/home/ubuntu/tfds'
 TFDS_DATA_DIR = DATA_ROOT
 os.environ['TORNET_ROOT'] = DATA_ROOT
 os.environ['TFDS_DATA_DIR'] = TFDS_DATA_DIR
+import tensorflow as tf
+
+class TverskyLoss(tf.keras.losses.Loss):
+    def __init__(self, alpha=0.5, beta=0.5, smooth=1e-6, from_logits=False, name="tversky_loss"):
+        super().__init__(name=name)
+        self.alpha = alpha
+        self.beta = beta
+        self.smooth = smooth
+        self.from_logits = from_logits
+
+    def call(self, y_true, y_pred):
+        # Apply sigmoid if using logits
+        if self.from_logits:
+            y_pred = tf.nn.sigmoid(y_pred)
+
+        y_true = tf.cast(y_true, tf.float32)
+        y_pred = tf.clip_by_value(y_pred, self.smooth, 1.0 - self.smooth)
+
+        tp = tf.reduce_sum(y_true * y_pred)
+        fp = tf.reduce_sum((1 - y_true) * y_pred)
+        fn = tf.reduce_sum(y_true * (1 - y_pred))
+
+        tversky_index = (tp + self.smooth) / (tp + self.alpha * fp + self.beta * fn + self.smooth)
+        return 1.0 - tversky_index
 
 # Environment Variables
 EXP_DIR = "."
@@ -61,126 +85,6 @@ os.environ['TFDS_DATA_DIR']=TFDS_DATA_DIR
 
 logging.info(f'TORNET_ROOT={DATA_ROOT}')
 
-
-def build_model(model:'wide_resnet',shape:Tuple[int]=(120,240,2),
-                c_shape:Tuple[int]=(120,240,2),
-                input_variables:List[str]=ALL_VARIABLES,
-                start_filters:int=64,
-                l2_reg:float=0.001,
-                background_flag:float=-3.0,
-                include_range_folded:bool=True,dropout_rate=0.1):
-    # Create input layers for each input_variables
-    inputs = {}
-    for v in input_variables:
-        inputs[v]=keras.Input(shape,name=v)
-    n_sweeps=shape[2]
-    
-    # Normalize inputs and concate along channel dim
-    normalized_inputs=keras.layers.Concatenate(axis=-1,name='Concatenate1')(
-        [normalize(inputs[v],v) for v in input_variables]
-        )
-
-    # Replace nan pixel with background flag
-    normalized_inputs = FillNaNs(background_flag)(normalized_inputs)
-
-    # Add channel for range folded gates
-    if include_range_folded:
-        range_folded = keras.Input(shape[:2]+(n_sweeps,),name='range_folded_mask')
-        inputs['range_folded_mask']=range_folded
-        normalized_inputs = keras.layers.Concatenate(axis=-1,name='Concatenate2')(
-               [normalized_inputs,range_folded])
-        
-    # Input coordinate information
-    cin=keras.Input(c_shape,name='coordinates')
-    inputs['coordinates']=cin
-    
-    x,c = normalized_inputs,cin
-    
-    if model == 'wide_resnet':
-        x, c = wide_resnet_block(x, c, filters=start_filters, widen_factor=2, l2_reg=l2_reg,nconvs=3, drop_rate=dropout_rate)
-        x, c = wide_resnet_block(x, c, filters=start_filters*2, widen_factor=2, l2_reg=l2_reg,nconvs=3, drop_rate=dropout_rate)
-        x, c = wide_resnet_block(x, c, filters=start_filters*3, widen_factor=2, l2_reg=l2_reg,nconvs=3, drop_rate=dropout_rate)
-        x=se_block(x)
-    x = Conv2D(filters=512, kernel_size=1,
-                          kernel_regularizer=keras.regularizers.l2(l2_reg),
-                          activation='relu')(x)
-    x = Conv2D(filters=256, kernel_size=1,
-                          kernel_regularizer=keras.regularizers.l2(l2_reg),
-                          activation='relu')(x)
-    x = Conv2D(filters=1, kernel_size=1,name='heatmap')(x)
-        # Max in scene
-    output =GlobalMaxPooling2D()(x)
-        
-    return keras.Model(inputs=inputs,outputs=output)
-
-def se_block(x, ratio=16, name=None):
-    filters = x.shape[-1]
-    
-    # Squeeze
-    se = GlobalAveragePooling2D(name=f"{name}_gap" if name else None)(x)
-
-    # Excite
-    se = Dense(filters // ratio, activation="relu", name=f"{name}_fc1" if name else None)(se)
-    se = Dense(filters, activation="sigmoid", name=f"{name}_fc2" if name else None)(se)
-
-    # Explicit broadcast shape for Multiply
-    se = Reshape((1, 1, filters), name=f"{name}_reshape" if name else None)(se)
-
-    # Multiply
-    x = Multiply(name=f"{name}_scale" if name else None)([x, se])
-    return x
-
-
-def wide_resnet_block(x, c, filters=64, widen_factor=2, l2_reg=1e-6, drop_rate=0.0,nconvs=2):
-    """Wide ResNet Block with CoordConv2D"""
-    shortcut_x, shortcut_c = x, c  # Skip connection
-
-    # 3x3 CoordConv2D (Wider filters)
-    for i in range(nconvs):
-        x, c = CoordConv2D(filters=filters * widen_factor, kernel_size=3, padding="same",
-                        kernel_regularizer=keras.regularizers.l2(l2_reg),
-                        activation=None)([x, c])
-        x = BatchNormalization()(x)
-    # Skip Connection
-    shortcut_x, shortcut_c = CoordConv2D(filters=filters * widen_factor, kernel_size=1, padding="same",
-                                         kernel_regularizer=keras.regularizers.l2(l2_reg),
-                                         activation=None)([shortcut_x, shortcut_c])
-    
-
-    # Add Residual Connection
-    x = Activation('relu')(x)
-    x = Add()([x, shortcut_x])
-
-    # Pooling and dropout
-    x = MaxPool2D(pool_size=2, strides=2, padding='same')(x)
-    c = MaxPool2D(pool_size=2, strides=2, padding='same')(c)
-
-    if drop_rate > 0:
-        x = Dropout(rate=drop_rate)(x)
-    
-    return x, c
-
-
-
-def normalize(x,
-              name:str):
-    """
-    Channel-wise normalization using known CHANNEL_MIN_MAX
-    """
-    min_max = np.array(CHANNEL_MIN_MAX[name]) # [2,]
-    n_sweeps=x.shape[-1]
-    
-    # choose mean,var to get approximate [-1,1] scaling
-    var=((min_max[1]-min_max[0])/2)**2 # scalar
-    var=np.array(n_sweeps*[var,])    # [n_sweeps,]
-    
-    offset=(min_max[0]+min_max[1])/2    # scalar
-    offset=np.array(n_sweeps*[offset,]) # [n_sweeps,]
-
-    return keras.layers.Normalization(mean=offset,
-                                         variance=var,
-                                         name='Normalize_%s' % name)(x)
-
 # Enable GPU Memory Growth
 gpus = tf.config.experimental.list_physical_devices('GPU')
 if gpus:
@@ -189,6 +93,7 @@ if gpus:
 
 strategy = tf.distribute.MirroredStrategy()
 os.environ['TF_CUDNN_USE_AUTOTUNE'] = '0'
+import tensorflow as tf
 
 tf.config.optimizer.set_jit(True)  # Enable XLA (Accelerated Linear Algebra)
 logging.info(f"Number of devices: {strategy.num_replicas_in_sync}")
@@ -199,11 +104,11 @@ DEFAULT_CONFIG={"epochs":100,
                 "val_years": [2021, 2022], "batch_size": 64
                 , "model": "wide_resnet", 
                 "start_filters": 48, 
-                "learning_rate": 1e-3, 
+                "learning_rate": 1e-5, 
                 "decay_steps": 1386, 
                 "decay_rate": 0.958,
-                "dropout_rate":0.1, 
-                "l2_reg": 1e-6, "wN": 1.0, "w0": 1.0, "w1": 1.0, "w2": 1.0, "wW": 1.0, "label_smooth": 0.1, 
+                "dropout_rate":0.0, 
+                "l2_reg": 1e-6, "wN": 0.00001, "w0": 1.0, "w1": 1.0, "w2": 1.0, "wW": 1.0, "label_smooth": 0.1, 
                 "loss": "cce", "head": "maxpool", "exp_name": "tornado_baseline", "exp_dir": ".",
                   "dataloader": "tensorflow-tfds", 
                   "dataloader_kwargs": {"select_keys": ["DBZ", "VEL", "KDP", "RHOHV", "ZDR", "WIDTH", "range_folded_mask", "coordinates"]}}
@@ -242,43 +147,40 @@ def main(config):
 
     # Apply to Train and Validation Data
     ds_train = get_dataloader(dataloader, DATA_ROOT, train_years, "train", batch_size, weights, **dataloader_kwargs)
-    ds_val = get_dataloader(dataloader, DATA_ROOT, val_years, "train", batch_size, weights, **dataloader_kwargs)
+    ds_val = get_dataloader(dataloader, DATA_ROOT, val_years, "train", batch_size, {'wN':1.0,'w0':1.0,'w1':1.0,'w2':1.0,'wW':1.0}, **dataloader_kwargs)
 
     x, _, _ = next(iter(ds_train))
     
     in_shapes = (None, None, get_shape(x)[-1])
     c_shapes = (None, None, x["coordinates"].shape[-1])
-    nn = build_model(model=model,shape=in_shapes, c_shape=c_shapes, start_filters=start_filters, 
-                         l2_reg=l2_reg, input_variables=input_variables,dropout_rate=dropout_rate)
-
-    # Loss Function
+        # Loss Function
     import tensorflow as tf
     from tensorflow.keras import backend as K
     # Optimizer with Learning Rate Decay
     from_logits=True
-    from tensorflow.keras.losses import BinaryCrossentropy
+    from tensorflow.keras.losses import Tversky,BinaryCrossentropy,BinaryFocalCrossentropy
 
-    loss = BinaryCrossentropy(from_logits=True)
-    
+    loss = BinaryCrossentropy(from_logits=True,label_smoothing= 0.1)
     # Optimizer with Learnindg Rate Decay
 
-    lr_schedule = CosineDecayRestarts(
-        initial_learning_rate=1e-3,
-        first_decay_steps=2039,  # 1 epoch
-        t_mul=2.0,               # each cycle doubles
-        m_mul=0.9                # restart peak decays slightly
-    )
 
     opt = AdamW(
-        learning_rate=lr_schedule,
+        learning_rate=CosineDecayRestarts(
+    initial_learning_rate=lr,
+    first_decay_steps=100,
+    t_mul=2.0,
+    m_mul=0.9
+),
         weight_decay=1e-4,
         beta_1=0.9,
         beta_2=0.999,
         epsilon=1e-7
     )
-    from_logits=False
+
+
+    from_logits=True
     # Metrics (Optimize AUCPR)
-    metrics = [keras.metrics.AUC(from_logits=from_logits,curve='PR',name='AUCPR',num_thresholds=2000), 
+    metrics = [keras.metrics.AUC(from_logits=from_logits,curve='PR',name='AUCPR',num_thresholds=1000), 
                 tfm.BinaryAccuracy(from_logits,name='BinaryAccuracy'), 
                 tfm.TruePositives(from_logits,name='TruePositives'),
                 tfm.FalsePositives(from_logits,name='FalsePositives'), 
@@ -288,9 +190,10 @@ def main(config):
                 tfm.Recall(from_logits,name='Recall'),
                 tfm.F1Score(from_logits=from_logits,name='F1')]
     
-    nn.compile(loss=loss, metrics=metrics, optimizer=opt,jit_compile=True)
+
+    nn = keras.models.load_model('/home/ubuntu/tornet-Higgins/40 epoch march 22nd overnight/tornadoDetector_030.keras')
     
-    # Experiment Directory
+    nn.compile(optimizer=opt,loss=loss)
     expdir = make_exp_dir(exp_dir=exp_dir, prefix=exp_name)
     with open(os.path.join(expdir,'data.json'),'w') as f:
         json.dump(
@@ -307,7 +210,9 @@ def main(config):
         keras.callbacks.ModelCheckpoint(checkpoint_name, monitor='val_AUCPR', save_best_only=False),
         keras.callbacks.CSVLogger(os.path.join(expdir, 'history.csv')),
         keras.callbacks.TerminateOnNaN(),
-        keras.callbacks.EarlyStopping(monitor='val_AUCPR', patience=3, mode='max', restore_best_weights=True),
+        keras.callbacks.EarlyStopping(monitor='val_AUCPR', patience=5, mode='max', restore_best_weights=True),
+        keras.callbacks.EarlyStopping(monitor='val_F1', patience=5, mode='max', restore_best_weights=True)
+
     ]
     
     # TensorBoard Logging
