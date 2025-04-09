@@ -1,0 +1,3 @@
+test to see if resnet did better with Combo+AdamW+Cosine vs BCE+Adam+Exp
+virtually tied, but BCE+Adam+Exp was slightly better
+

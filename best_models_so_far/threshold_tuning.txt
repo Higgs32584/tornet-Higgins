@@ -1,0 +1,55 @@
+{'AUCPR': 0.5047191381454468, 
+'BinaryAccuracy': 0.946388304233551, 
+'TruePositives': 821.0, 
+'FalsePositives': 517.0, 
+'TrueNegatives': 28959.0, 
+'FalseNegatives': 1170.0, 
+'Precision': 0.6136023998260498, 
+'Recall': 0.41235560178756714, 
+'F1': 0.4932411015033722, 
+'ThreatScore': 0.03209850937128067,
+Name:'tornado_detector_14'
+}
+
+{ 'name':'tornado_detector_013.keras'
+'AUCPR': 0.4904162585735321, 
+'BinaryAccuracy': 0.9395239353179932, 
+'TruePositives': 912.0, 
+'FalsePositives': 824.0, 
+'TrueNegatives': 28652.0, 
+'FalseNegatives': 1079.0, 
+'Precision': 0.5253456234931946, 
+'Recall': 0.4580612778663635, 
+'F1': 0.48940160870552063, 
+'ThreatScore': 0.03549206256866455
+'val aucpr 5611': 
+'from_logits': False
+}
+
+{ 'name':'tornadoDetector_070.keras'
+'AUCPR': 0.450777530670166, 
+'BinaryAccuracy': 0.9444814920425415, 
+'TruePositives': 495.0, 
+'FalsePositives': 251.0, 
+'TrueNegatives': 29225.0, 
+'FalseNegatives': 1496.0, 
+'Precision': 0.6635388731956482, 
+'Recall': 0.24861878156661987, 
+'F1': 0.3617098331451416, 
+'ThreatScore': 0.022477881982922554
+'fam_dir': 'val auc pr.4951'
+from_logits: False
+'type':'wide_resnet'}
+
+
+{'AUCPR': 0.5173593163490295, 
+'BinaryAccuracy': 0.9392379522323608, 
+'TruePositives': 935.0, 
+'FalsePositives': 856.0, 
+'TrueNegatives': 28620.0, 
+'FalseNegatives': 1056.0, 
+'Precision': 0.5220547318458557, 
+'Recall': 0.469613254070282, 
+'F1': 0.49444735050201416,
+'type':'vgg_block'}
+

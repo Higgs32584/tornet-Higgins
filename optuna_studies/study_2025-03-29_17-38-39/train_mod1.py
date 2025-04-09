@@ -21,54 +21,8 @@ from tensorflow.keras.layers import (
     Reshape
 
 )
-class FalseAlarmRate(tf.keras.metrics.Metric):
-    def __init__(self, name="false_alarm_rate", **kwargs):
-        super().__init__(name=name, **kwargs)
-        self.false_positives = self.add_weight(name="fp", initializer="zeros")
-        self.true_positives = self.add_weight(name="tp", initializer="zeros")
-        self.epsilon = 1e-7
-
-    def update_state(self, y_true, y_pred, sample_weight=None):
-        y_pred = tf.cast(y_pred > 0.5, tf.float32)  # Binary predictions
-        y_true = tf.cast(y_true, tf.float32)
-
-        fp = tf.reduce_sum((1 - y_true) * y_pred)
-        tp = tf.reduce_sum(y_true * y_pred)
-
-        self.false_positives.assign_add(fp)
-        self.true_positives.assign_add(tp)
-
-    def result(self):
-        return self.false_positives / (self.false_positives + self.true_positives + self.epsilon)
-
-    def reset_states(self):
-        self.false_positives.assign(0)
-        self.true_positives.assign(0)
-
-class ThreatScore(tf.keras.metrics.Metric):
-    def __init__(self, name="threat_score", **kwargs):
-        super().__init__(name=name, **kwargs)
-        self.tp = self.add_weight(name="tp", initializer="zeros")
-        self.fp = self.add_weight(name="fp", initializer="zeros")
-        self.fn = self.add_weight(name="fn", initializer="zeros")
-        self.epsilon = 1e-7
-
-    def update_state(self, y_true, y_pred, sample_weight=None):
-        y_pred = tf.cast(y_pred > 0.5, tf.float32)
-        y_true = tf.cast(y_true, tf.float32)
-        self.tp.assign_add(tf.reduce_sum(y_true * y_pred))
-        self.fp.assign_add(tf.reduce_sum((1 - y_true) * y_pred))
-        self.fn.assign_add(tf.reduce_sum(y_true * (1 - y_pred)))
-
-    def result(self):
-        return self.tp / (self.tp + self.fp + self.fn + self.epsilon)
-
-    def reset_states(self):
-        self.tp.assign(0)
-        self.fp.assign(0)
-        self.fn.assign(0)
-
-
+from custom_func import FalseAlarmRate,ThreatScore,combo_loss
+import optuna
 from typing import List, Tuple
 from tensorflow.keras.optimizers import AdamW
 from tensorflow.keras.optimizers.schedules import CosineDecayRestarts
@@ -228,108 +182,94 @@ gpus = tf.config.experimental.list_physical_devices('GPU')
 if gpus:
     for gpu in gpus:
         tf.config.experimental.set_memory_growth(gpu, True)
-
+import datetime
 strategy = tf.distribute.MirroredStrategy()
 #os.environ['TF_CUDNN_USE_AUTOTUNE'] = '0'
+strategy = tf.distribute.MultiWorkerMirroredStrategy()
+tf.config.optimizer.set_jit(True)
 
+# Create a unique directory for this study
+from datetime import datetime
+timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+STUDY_DIR = os.path.join("optuna_studies", f"study_{timestamp}")
+os.makedirs(STUDY_DIR, exist_ok=True)
 #tf.config.optimizer.set_jit(True)  # Enable XLA (Accelerated Linear Algebra)
 logging.info(f"Number of devices: {strategy.num_replicas_in_sync}")
 # Default Configuration
-DEFAULT_CONFIG={"epochs":100, "input_variables": ["DBZ", "VEL", "KDP", "ZDR","RHOHV","WIDTH"], "train_years": [2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020], "val_years": [2021, 2022], "batch_size": 64, "model": "wide_resnet", "start_filters": 48, "learning_rate": 3e-4, "decay_steps": 1386, "decay_rate": 0.958,"dropout_rate":0.1, "l2_reg": 1e-4, "wN": 0.25, "wW": 0.75, "w0": 3.0, "w1": 5.0, "w2": 8.0, "label_smooth": 0.1,"loss": "cce", "head": "maxpool", "exp_name": "tornado_baseline", "exp_dir": ".","dataloader": "tensorflow-tfds", "dataloader_kwargs": {"select_keys": ["DBZ", "VEL", "KDP", "RHOHV", "ZDR", "WIDTH", "range_folded_mask", "coordinates","rng_lower","rng_upper","az_lower","az_upper"]}}
-def main(config):
-    # Gather all hyperparams
-    epochs=config.get('epochs')
-    batch_size=config.get('batch_size')
-    start_filters=config.get('start_filters')
-    dropout_rate=config.get('dropout_rate')
-
-    lr=config.get('learning_rate')
-    l2_reg=config.get('l2_reg')
-    wN=config.get('wN')
-    w0=config.get('w0')
-    w1=config.get('w1')
-    w2=config.get('w2')
-    wW=config.get('wW')
-    input_variables=config.get('input_variables')
-    exp_name=config.get('exp_name')
-    model=config.get('model')
-    exp_dir=config.get('exp_dir')
-    train_years=config.get('train_years')
-    val_years=config.get('val_years')
-    dataloader=config.get('dataloader')
-    dataloader_kwargs = config.get('dataloader_kwargs')
-    
-    logging.info(f'Using {dataloader} dataloader')
-    logging.info(f'Running with config: {config}')
-    weights={'wN':wN,'w0':w0,'w1':w1,'w2':w2,'wW':wW}
-
-    # Data Loaders
-    dataloader_kwargs.update({'select_keys': input_variables + ['range_folded_mask', 'coordinates']})
+DEFAULT_CONFIG={"epochs":100, 
+                "input_variables": ["DBZ", "VEL", "KDP", "ZDR","RHOHV","WIDTH"], 
+                "train_years": [2014], 
+                "val_years": [2015], "batch_size": 128
+                , "model": "wide_resnet", 
+                "start_filters": 48, 
+                "learning_rate": 3e-4, 
+                "decay_steps": 1386, 
+                "decay_rate": 0.958,
+                "dropout_rate":0.1, 
+                "l2_reg": 1e-4, 
+                "wN": 0.25, 
+                "wW": 0.75,
+                "w0": 3.0, 
+                "w1": 5.0,
+                  "w2": 8.0, 
+                  "label_smooth": 0.1, 
+                "loss": "cce", "head": "maxpool", "exp_name": "tornado_baseline", "exp_dir": ".",
+                  "dataloader": "tensorflow-tfds", 
+                  "dataloader_kwargs": {"select_keys": ["DBZ", "VEL", "KDP", "RHOHV", "ZDR", "WIDTH", "range_folded_mask", "coordinates"]}}
+def objective(trial):
+    config = DEFAULT_CONFIG.copy()
+    config["learning_rate"] = trial.suggest_float("learning_rate", 1e-6, 1e-3, log=True)
+    config["l2_reg"] = trial.suggest_float("l2_reg", 1e-7, 1e-5, log=True)
+    config["weight_decay"] = trial.suggest_float("weight_decay", 1e-7, 1e-5, log=True)
+    config["dropout_rate"] = trial.suggest_float("dropout_rate", 0.05, 0.2)
+    config["weights"] = {
+        'wN': trial.suggest_float('wN', 0.05, 0.2),
+        'w0': trial.suggest_int('w0', 0.5, 3.0),
+        'w1': trial.suggest_int('w1', 2.0, 5.0),
+        'w2': trial.suggest_int('w2', 5.0, 15.0),
+        'wW': trial.suggest_float('wN', 0.01, 0.25)
+    }
+    config["first_decay_steps"] = trial.suggest_int("first_decay_steps", 1000, 2500)*1.0  # Controls decay restart interval
+    logging.info(f"Tuning with config: {config}")
+    config["batch_size"] = 128
+    # Load dataset
     import tensorflow_datasets as tfds
     import tornet.data.tfds.tornet.tornet_dataset_builder
-
-    # Apply to Train and Validation Data
-    ds_train = get_dataloader(dataloader, DATA_ROOT, train_years, "train", batch_size, weights, **dataloader_kwargs)
-    ds_val = get_dataloader(dataloader, DATA_ROOT, val_years, "train", batch_size, {'wN':1.0,'w0':1.0,'w1':1.0,'w2':1.0,'wW':1.0}, **dataloader_kwargs)
+    ds_train = get_dataloader(config['dataloader'], DATA_ROOT, config['train_years'], "train",
+                              config['batch_size'], config['weights'], **config['dataloader_kwargs'])
+    ds_val = get_dataloader(config['dataloader'], DATA_ROOT, config['val_years'], "train",
+                            config['batch_size'], {'wN': 1.0,'w0': 1.0,'w1': 1.0,'w2': 1.0,'wW': 1.0}, **config['dataloader_kwargs'])
 
     x, _, _ = next(iter(ds_train))
-    
     in_shapes = (None, None, get_shape(x)[-1])
     c_shapes = (None, None, x["coordinates"].shape[-1])
-    nn = build_model(model=model,shape=in_shapes, c_shape=c_shapes, start_filters=start_filters, 
-                         l2_reg=l2_reg, input_variables=input_variables,dropout_rate=dropout_rate)
-    print(nn.summary())
-    
-    # Loss Function
-    import tensorflow as tf
-    from tensorflow.keras import backend as K
-    # Optimizer with Learning Rate Decay
-    from_logits=False
 
-    from tensorflow.keras.losses import BinaryCrossentropy,Tversky
-    def focal_loss(gamma=2.0, alpha=0.85):
-        def loss_fn(y_true, y_pred):
-            epsilon = tf.keras.backend.epsilon()
-            y_pred = tf.clip_by_value(y_pred, epsilon, 1. - epsilon)
-            pt = tf.where(tf.equal(y_true, 1), y_pred, 1 - y_pred)
-            return -tf.reduce_mean(alpha * tf.pow(1. - pt, gamma) * tf.math.log(pt))
-        return loss_fn
-    def tversky_loss(alpha=0.3, beta=0.7, smooth=1e-6):
-        """
-        Tversky Loss: adjusts trade-off between FP and FN.
-        alpha = weight for FP
-        beta = weight for FN
-        """
-        def loss_fn(y_true, y_pred):
-            y_true = tf.cast(y_true, tf.float32)
-            y_pred = tf.cast(y_pred, tf.float32)
-            tp = tf.reduce_sum(y_true * y_pred)
-            fp = tf.reduce_sum((1 - y_true) * y_pred)
-            fn = tf.reduce_sum(y_true * (1 - y_pred))
-            return 1 - (tp + smooth) / (tp + alpha * fp + beta * fn + smooth)
-        return loss_fn
-    def combo_loss(alpha=0.7):
-        return lambda y_true, y_pred: alpha * tversky_loss(alpha=0.5, beta=0.5)(y_true, y_pred) + \
-                                    (1 - alpha) * focal_loss(gamma=2.0, alpha=0.85)(y_true, y_pred)
+    model = build_model(
+        model=config["model"], shape=in_shapes, c_shape=c_shapes, 
+        input_variables=config['input_variables'], 
+        l2_reg=config["l2_reg"], start_filters=config["start_filters"],dropout_rate=config["dropout_rate"]
+    )
     loss = combo_loss()
     
     # Optimizer with Learnindg Rate Decay
 
     lr_schedule = CosineDecayRestarts(
-        initial_learning_rate=lr,
-        first_decay_steps=2038,  # 1 epoch
+        initial_learning_rate=config["learning_rate"],
+        first_decay_steps=config["first_decay_steps"],  # 1 epoch
         t_mul=2.0,               # each cycle doubles
-        m_mul=0.9                # restart peak decays slightly
+        m_mul=0.9              # restart peak decays slightly
     )
 
     opt = AdamW(
         learning_rate=lr_schedule,
-        weight_decay=1e-4,
+        weight_decay=config["weight_decay"],
         beta_1=0.9,
         beta_2=0.999,
         epsilon=1e-7
     )
-    # Metrics (Optimize AUCPR)
+    
+    from_logits=False
+    
     metrics = [keras.metrics.AUC(from_logits=from_logits,curve='PR',name='AUCPR',num_thresholds=1000), 
                 tfm.BinaryAccuracy(from_logits,name='BinaryAccuracy'), 
                 tfm.TruePositives(from_logits,name='TruePositives'),
@@ -341,45 +281,52 @@ def main(config):
                 FalseAlarmRate(name='FalseAlarmRate'),
                 tfm.F1Score(from_logits=from_logits,name='F1'),
                 ThreatScore(name='ThreatScore')]
-    
-    nn.compile(loss=loss, metrics=metrics, optimizer=opt,jit_compile=True)
-    
-    # Experiment Directory
-    expdir = make_exp_dir(exp_dir=exp_dir, prefix=exp_name)
-    with open(os.path.join(expdir,'data.json'),'w') as f:
-        json.dump(
-            {'data_root':DATA_ROOT,
-             'train_data':list(train_years), 
-             'val_data':list(val_years)},f)
-    with open(os.path.join(expdir,'params.json'),'w') as f:
-        json.dump({'config':config},f)
-    # Copy the training script
-    shutil.copy(__file__, os.path.join(expdir,'train.py')) 
-    # Callbacks (Now Monitors AUCPR)
-    checkpoint_name = os.path.join(expdir, 'tornadoDetector_{epoch:03d}.keras')
-    callbacks = [
-        keras.callbacks.ModelCheckpoint(checkpoint_name, monitor='val_AUCPR', save_best_only=False),
-        keras.callbacks.CSVLogger(os.path.join(expdir, 'history.csv')),
-        keras.callbacks.TerminateOnNaN(),
-        keras.callbacks.EarlyStopping(monitor='val_AUCPR', patience=5, mode='max', restore_best_weights=True),
-        keras.callbacks.EarlyStopping(monitor='val_F1', patience=5, mode='max', restore_best_weights=True),
+    model.compile(loss=loss, optimizer=opt, metrics=metrics,jit_compile=True)
 
-    ]
-    
-    # TensorBoard Logging
-    if keras.config.backend() == "tensorflow":
-        callbacks.append(keras.callbacks.TensorBoard(log_dir=os.path.join(expdir, 'logs'), write_graph=False))
-    
-    # Train Model
-    history = nn.fit(ds_train, epochs=epochs, validation_data=ds_val, callbacks=callbacks, verbose=1)
-    
-    # Get Best Metrics
+    # Train the model
+
+    early_stopping = keras.callbacks.EarlyStopping(monitor='val_AUCPR', patience=2, mode='max', restore_best_weights=True)
+    history = model.fit(ds_train, epochs=config['epochs'], validation_data=ds_val, verbose=1, callbacks=[early_stopping])
+
+    # Get best validation AUCPR
     best_aucpr = max(history.history.get('val_AUCPR', [0]))
-    return {'AUCPR': best_aucpr}
+
+    # Log trial results
+    log_trial(trial, best_aucpr)
+    tf.keras.backend.clear_session()
+    import gc
+    gc.collect()
+
+    return best_aucpr
+
+def log_trial(trial, trial_results):
+    """Logs individual trial results to a JSON file."""
+    trial_data = {
+        "trial_id": trial.number,
+        "params": trial.params,
+        "value": trial_results,
+        "DEFAULT_CONFIG": DEFAULT_CONFIG
+    }
+    trial_log_path = os.path.join(STUDY_DIR, f"trial_{trial.number}.json")
+    with open(trial_log_path, "w") as f:
+        json.dump(trial_data, f, indent=4)
 
 if __name__ == '__main__':
-    config = DEFAULT_CONFIG
-    if len(sys.argv) > 1:
-            config.update(json.load(open(sys.argv[1], 'r')))
     with strategy.scope():
-        main(config)
+        study = optuna.create_study(direction='maximize', sampler=optuna.samplers.TPESampler(seed=SEED),pruner=optuna.pruners.HyperbandPruner())
+        study.optimize(objective, n_trials=100)
+
+    # Save best trial parameters
+    best_trial_data = {
+        "best_trial_id": study.best_trial.number,
+        "best_params": study.best_trial.params,
+        "best_value": study.best_trial.value,
+        "DEFAULT_CONFIG": DEFAULT_CONFIG.copy()
+    }
+
+    best_params_path = os.path.join(STUDY_DIR, "best_params.json")
+    with open(best_params_path, "w") as f:
+        json.dump(best_trial_data, f, indent=4)
+
+    print(f"Best trial saved to: {best_params_path}")
+    print("Best trial:", study.best_trial)

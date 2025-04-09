@@ -1,0 +1,28 @@
+{   dead_2
+    'AUCPR': 0.09545359760522842, 
+'BinaryAccuracy': 0.9367273449897766, 
+'TruePositives': 0.0, 
+'FalsePositives': 0.0, 
+'TrueNegatives': 29476.0, 
+'FalseNegatives': 1991.0, 
+'Precision': 0.0, 
+'Recall': 0.0, 
+'FalseAlarmRate': 0.0, 
+'F1': 0.0, 
+'ThreatScore': 0.0}
+
+{dead_3,'AUCPR': 0.09794194996356964, 
+'BinaryAccuracy': 0.0632726326584816, 
+'TruePositives': 1991.0, 
+'FalsePositives': 29476.0, 
+'TrueNegatives': 0.0, 
+'FalseNegatives': 0.0, 
+'Precision': 0.0632726326584816, 
+'Recall': 1.0, 
+'FalseAlarmRate': 0.0, 
+'F1': 0.11901487410068512,
+'ThreatScore': 0.0}
+
+{dead_4, 'AUCPR': 0.0632726326584816, 'BinaryAccuracy': 0.9367273449897766, 'TruePositives': 0.0, 'FalsePositives': 0.0, 
+'TrueNegatives': 29476.0, 'FalseNegatives': 1991.0, 'Precision': 0.0, 'Recall': 0.0, 'FalseAlarmRate': 0.0, 'F1': 0.0, 
+'ThreatScore': 0.0}

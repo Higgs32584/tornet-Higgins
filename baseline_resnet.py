@@ -1,15 +1,11 @@
-import sys
 import os
-import numpy as np
+import sys
 import json
 import shutil
-import keras
 import random
-import sys
-import os
-import json
-import shutil
 import logging
+from typing import List, Tuple
+
 import numpy as np
 import tensorflow as tf
 import tensorflow_datasets as tfds
@@ -25,12 +21,11 @@ from tensorflow.keras.layers import (
     Multiply,
     Conv2D,
     GlobalMaxPooling2D,
-    Reshape
-
+    Reshape,
 )
-from typing import List, Tuple
 from tensorflow.keras.optimizers import AdamW
 from tensorflow.keras.optimizers.schedules import CosineDecayRestarts
+
 from tornet.data.loader import get_dataloader
 from tornet.data.preprocess import get_shape
 from tornet.data.constants import ALL_VARIABLES, CHANNEL_MIN_MAX
@@ -38,6 +33,7 @@ from tornet.metrics.keras import metrics as tfm
 from tornet.utils.general import make_exp_dir, make_callback_dirs
 from tornet.models.keras.layers import CoordConv2D, FillNaNs
 import tornet.data.tfds.tornet.tornet_dataset_builder
+
 SEED = 42
 os.environ['PYTHONHASHSEED'] = str(SEED)
 random.seed(SEED)
@@ -57,22 +53,30 @@ TFDS_DATA_DIR = '/home/ubuntu/tfds'
 DATA_ROOT = "/home/ubuntu/tfds"
 TFDS_DATA_DIR = "/home/ubuntu/tfds"
 os.environ['TORNET_ROOT']= DATA_ROOT
+os.environ['DATA_ROOT']= DATA_ROOT
+
 os.environ['TFDS_DATA_DIR']=TFDS_DATA_DIR
 import logging
 logging.basicConfig(level=logging.INFO)
+logging.basicConfig(level=logging.ERROR)
+SEED = 42  
 
-from tornet.data.loader import get_dataloader
-from tornet.data.preprocess import get_shape
-from tornet.data.constants import ALL_VARIABLES
+# Set random seeds for reproducibility
+import random
+SEED = 42
+os.environ['PYTHONHASHSEED'] = str(SEED)
+random.seed(SEED)
+np.random.seed(SEED)
+tf.random.set_seed(SEED)
+# Environment Variables
+TFDS_DATA_DIR = DATA_ROOT
+EXP_DIR = "."
+DATA_ROOT = '/home/ubuntu/tfds/'
+TFDS_DATA_DIR = '/home/ubuntu/tfds/'
+os.environ['TORNET_ROOT']= DATA_ROOT
+os.environ['DATA_ROOT']= DATA_ROOT
 
-from tornet.models.keras.losses import mae_loss
-
-from tornet.models.keras.cnn_baseline import build_model
-
-from tornet.metrics.keras import metrics as tfm
-
-from tornet.utils.general import make_exp_dir, make_callback_dirs
-
+os.environ['TFDS_DATA_DIR']=TFDS_DATA_DIR
 EXP_DIR=os.environ.get('EXP_DIR','.')
 DATA_ROOT=os.environ['TORNET_ROOT']
 logging.info('TORNET_ROOT='+DATA_ROOT)
@@ -105,7 +109,7 @@ DEFAULT_CONFIG={
     'head':'maxpool',
     'exp_name':'tornet_baseline',
     'exp_dir':EXP_DIR,
-    "dataloader": "tensorflow-tfds", 
+    'dataloader':"tensorflow-tfds",
     'dataloader_kwargs': {}
 }
 def vgg_block(x,c, filters=64, ksize=3, n_convs=2, l2_reg=1e-6, drop_rate=0.0):
@@ -140,7 +144,34 @@ def normalize(x,
     return keras.layers.Normalization(mean=offset,
                                          variance=var,
                                          name='Normalize_%s' % name)(x)
+def wide_resnet_block(x, c, filters=64, widen_factor=2, l2_reg=1e-6, drop_rate=0.0,nconvs=2):
+    """Wide ResNet Block with CoordConv2D"""
+    shortcut_x, shortcut_c = x, c  # Skip connection
 
+    # 3x3 CoordConv2D (Wider filters)
+    for i in range(nconvs):
+        x, c = CoordConv2D(filters=filters * widen_factor, kernel_size=3, padding="same",
+                        kernel_regularizer=keras.regularizers.l2(l2_reg),
+                        activation=None)([x, c])
+        x = BatchNormalization()(x)
+    # Skip Connection
+    shortcut_x, shortcut_c = CoordConv2D(filters=filters * widen_factor, kernel_size=1, padding="same",
+                                         kernel_regularizer=keras.regularizers.l2(l2_reg),
+                                         activation=None)([shortcut_x, shortcut_c])
+    
+
+    # Add Residual Connection
+    x = Activation('relu')(x)
+    x = Add()([x, shortcut_x])
+
+    # Pooling and dropout
+    x = MaxPool2D(pool_size=2, strides=2, padding='same')(x)
+    c = MaxPool2D(pool_size=2, strides=2, padding='same')(c)
+
+    if drop_rate > 0:
+        x = Dropout(rate=drop_rate)(x)
+    
+    return x, c
 
 
 
@@ -177,15 +208,11 @@ def build_model(shape:Tuple[int]=(120,240,2),
     # Input coordinate information
     cin=keras.Input(c_shape,name='coordinates')
     inputs['coordinates']=cin
-    
     x,c = normalized_inputs,cin
-    
-    x,c = vgg_block(x,c, filters=start_filters,   ksize=3, l2_reg=l2_reg, n_convs=2, drop_rate=0.1)   # (60,120)
-    # x,c = vgg_block(x,c, filters=2*start_filters, ksize=3, l2_reg=l2_reg, n_convs=2, drop_rate=0.1)  # (30,60)
-    # x,c = vgg_block(x,c, filters=4*start_filters, ksize=3, l2_reg=l2_reg, n_convs=3, drop_rate=0.1)  # (15,30)
-    # x,c = vgg_block(x,c, filters=8*start_filters, ksize=3, l2_reg=l2_reg, n_convs=3, drop_rate=0.1)  # (7,15)
-    #x,c = vgg_block(x,c, filters=8*start_filters, ksize=3, l2_reg=l2_reg, n_convs=3)  # (3,7)
-    
+
+    x, c = wide_resnet_block(x, c, filters=start_filters, widen_factor=2, l2_reg=l2_reg,nconvs=2, drop_rate=0.1)
+    x, c = wide_resnet_block(x, c, filters=start_filters*2, widen_factor=2, l2_reg=l2_reg,nconvs=2, drop_rate=0.1)
+    x, c = wide_resnet_block(x, c, filters=start_filters*4, widen_factor=2, l2_reg=l2_reg,nconvs=2, drop_rate=0.1)
     if head=='mlp':
         # MLP head
         x = keras.layers.Flatten()(x) 
@@ -201,11 +228,12 @@ def build_model(shape:Tuple[int]=(120,240,2),
                           kernel_regularizer=keras.regularizers.l2(l2_reg),
                           activation='relu')(x)
         x = keras.layers.Conv2D(filters=1, kernel_size=1,name='heatmap')(x)
-        # Max in scene
-        output = keras.layers.GlobalMaxPooling2D()(x)
+        x = keras.layers.GlobalMaxPooling2D()(x)
+        output = keras.layers.Activation("sigmoid")(x)
         
     return keras.Model(inputs=inputs,outputs=output)
    
+tf.config.optimizer.set_jit(True)
 
 
 def main(config):
@@ -255,19 +283,18 @@ def main(config):
                      l2_reg=l2_reg,
                      input_variables=input_variables,
                      head=head)
+    print(nn.summary())
     
     # model setup
     lr=keras.optimizers.schedules.ExponentialDecay(
                 learning_rate, decay_steps, decay_rate, staircase=False, name="exp_decay")
     
-    from_logits=True
+    from_logits=False
     if loss_fn.lower()=='cce':
         loss = keras.losses.BinaryCrossentropy( from_logits=from_logits, 
                                                     label_smoothing=label_smooth )
     elif loss_fn.lower()=='hinge':
         loss = keras.losses.Hinge() # automatically converts labels to -1,1
-    elif loss_fn.lower()=='mae':
-        loss = lambda yt,yp: mae_loss(yt,yp)
     else:
         raise RuntimeError('unknown loss %s' % loss_fn)
 

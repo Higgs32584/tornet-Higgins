@@ -235,7 +235,20 @@ strategy = tf.distribute.MirroredStrategy()
 #tf.config.optimizer.set_jit(True)  # Enable XLA (Accelerated Linear Algebra)
 logging.info(f"Number of devices: {strategy.num_replicas_in_sync}")
 # Default Configuration
-DEFAULT_CONFIG={"epochs":100, "input_variables": ["DBZ", "VEL", "KDP", "ZDR","RHOHV","WIDTH"], "train_years": [2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020], "val_years": [2021, 2022], "batch_size": 64, "model": "wide_resnet", "start_filters": 48, "learning_rate": 3e-4, "decay_steps": 1386, "decay_rate": 0.958,"dropout_rate":0.1, "l2_reg": 1e-4, "wN": 0.25, "wW": 0.75, "w0": 3.0, "w1": 5.0, "w2": 8.0, "label_smooth": 0.1,"loss": "cce", "head": "maxpool", "exp_name": "tornado_baseline", "exp_dir": ".","dataloader": "tensorflow-tfds", "dataloader_kwargs": {"select_keys": ["DBZ", "VEL", "KDP", "RHOHV", "ZDR", "WIDTH", "range_folded_mask", "coordinates","rng_lower","rng_upper","az_lower","az_upper"]}}
+DEFAULT_CONFIG={"epochs":100, 
+                "input_variables": ["DBZ", "VEL", "KDP", "ZDR","RHOHV","WIDTH"], 
+                "train_years": [2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020], 
+                "val_years": [2021, 2022], "batch_size": 64
+                , "model": "wide_resnet", 
+                "start_filters": 48, 
+                "learning_rate": 3e-4, 
+                "decay_steps": 1386, 
+                "decay_rate": 0.958,
+                "dropout_rate":0.1, 
+                "l2_reg": 1e-4, "wN": 0.25, "wW": 0.75, "w0": 3.0, "w1": 5.0, "w2": 8.0, "label_smooth": 0.1, 
+                "loss": "cce", "head": "maxpool", "exp_name": "tornado_baseline", "exp_dir": ".",
+                  "dataloader": "tensorflow-tfds", 
+                  "dataloader_kwargs": {"select_keys": ["DBZ", "VEL", "KDP", "RHOHV", "ZDR", "WIDTH", "range_folded_mask", "coordinates","rng_lower","rng_upper","az_lower","az_upper"]}}
 def main(config):
     # Gather all hyperparams
     epochs=config.get('epochs')

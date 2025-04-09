@@ -1,0 +1,5 @@
+Based off of the assumption that a gating mechanism, one where
+sending easier to classify examples one way and harder ones down a different 
+path would work better. This was largely because while there were easier to
+classify tornadoes within the dataset, there were also harder ones that
+the model failed to properly quantify, one that needed deeper layers.

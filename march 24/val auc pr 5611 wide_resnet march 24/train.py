@@ -128,11 +128,20 @@ def build_model(model='wide_resnet',shape:Tuple[int]=(120,240,2),
         inputs['range_folded_mask']=range_folded
         normalized_inputs = keras.layers.Concatenate(axis=-1,name='Concatenate2')(
                [normalized_inputs,range_folded])
-        
+
     # Input coordinate information
     cin=keras.Input(c_shape,name='coordinates')
     inputs['coordinates']=cin
-    
+    az_lower = keras.Input(shape=(1,), name='az_lower')
+    az_upper = keras.Input(shape=(1,), name='az_upper')
+    rng_lower = keras.Input(shape=(1,), name='rng_lower')
+    rng_upper = keras.Input(shape=(1,), name='rng_upper')
+
+    inputs['az_lower'] = az_lower
+    inputs['az_upper'] = az_upper
+    inputs['rng_lower'] = rng_lower
+    inputs['rng_upper'] = rng_upper
+
     x,c = normalized_inputs,cin
     
     if model == 'wide_resnet':
@@ -140,16 +149,31 @@ def build_model(model='wide_resnet',shape:Tuple[int]=(120,240,2),
         x, c = wide_resnet_block(x, c, filters=start_filters*2, widen_factor=2, l2_reg=l2_reg,nconvs=3, drop_rate=dropout_rate)
         x, c = wide_resnet_block(x, c, filters=start_filters*4, widen_factor=2, l2_reg=l2_reg,nconvs=3, drop_rate=dropout_rate)
         x=se_block(x)
+
     x = Conv2D(128, 3, padding='same', activation='relu')(x)
     x = BatchNormalization()(x)
     attention_map = Conv2D(1, 1, activation='sigmoid', name='attention_map')(x)  # shape (B, H, W, 1)
-    attention_map = Dropout(rate=0.2, name='attention_dropout')(attention_map)
+    #attention_map = Dropout(rate=0.2, name='attention_dropout')(attention_map)
     x_weighted = Multiply()([x, attention_map])
 
     x_avg = GlobalAveragePooling2D()(x_weighted)
     x_max = GlobalMaxPooling2D()(x_weighted)
-    x_concat = keras.layers.Concatenate()([x_avg, x_max])
+    
+    # Normalize scalar inputs
+    def normalize_scalar(x, mean, std):
+        return keras.layers.Lambda(lambda x: (x - mean) / std)(x)
 
+    az_l_norm = normalize_scalar(az_lower, 151.0, 110.0)
+    az_u_norm = normalize_scalar(az_upper, 211.0, 110.0)
+    rng_l_norm = normalize_scalar(rng_lower, 76193.0, 49812.0)
+    rng_u_norm = normalize_scalar(rng_upper, 136193.0, 49812.0)
+
+    scalar_feats = keras.layers.Concatenate(name='radar_scalar_inputs')(
+        [az_l_norm, az_u_norm, rng_l_norm, rng_u_norm]
+    )
+
+    # Combine everything
+    x_concat = keras.layers.Concatenate(name='final_concat')([x_avg, x_max, scalar_feats])
 
     x_dense = Dense(64, activation='relu')(x_concat)
     output = Dense(1, activation='sigmoid', name='output')(x_dense)
@@ -232,10 +256,11 @@ if gpus:
 strategy = tf.distribute.MirroredStrategy()
 #os.environ['TF_CUDNN_USE_AUTOTUNE'] = '0'
 
-#tf.config.optimizer.set_jit(True)  # Enable XLA (Accelerated Linear Algebra)
+tf.config.optimizer.set_jit(True)  # Enable XLA (Accelerated Linear Algebra)
 logging.info(f"Number of devices: {strategy.num_replicas_in_sync}")
 # Default Configuration
-DEFAULT_CONFIG={"epochs":100, "input_variables": ["DBZ", "VEL", "KDP", "ZDR","RHOHV","WIDTH"], "train_years": [2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020], "val_years": [2021, 2022], "batch_size": 64, "model": "wide_resnet", "start_filters": 48, "learning_rate": 3e-4, "decay_steps": 1386, "decay_rate": 0.958,"dropout_rate":0.1, "l2_reg": 1e-4, "wN": 0.25, "wW": 0.75, "w0": 3.0, "w1": 5.0, "w2": 8.0, "label_smooth": 0.1,"loss": "cce", "head": "maxpool", "exp_name": "tornado_baseline", "exp_dir": ".","dataloader": "tensorflow-tfds", "dataloader_kwargs": {"select_keys": ["DBZ", "VEL", "KDP", "RHOHV", "ZDR", "WIDTH", "range_folded_mask", "coordinates","rng_lower","rng_upper","az_lower","az_upper"]}}
+DEFAULT_CONFIG={"config": {"epochs": 100, "input_variables": ["DBZ", "VEL", "KDP", "ZDR", "RHOHV", "WIDTH"], "train_years": [2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020], "val_years": [2021, 2022], "batch_size": 64, "model": "wide_resnet", "start_filters": 48, "learning_rate": 0.0003, "decay_steps": 1386, "decay_rate": 0.958, "dropout_rate": 0.1, "l2_reg": 0.0001, "wN": 0.25, "wW": 0.75, "w0": 3.0, "w1": 5.0, "w2": 8.0, "label_smooth": 0.1, "loss": "cce", "head": "maxpool", "exp_name": "tornado_baseline", "exp_dir": ".", "dataloader": "tensorflow-tfds", "dataloader_kwargs": {"select_keys": ["DBZ", "VEL", "KDP", "ZDR", "RHOHV", "WIDTH", "range_folded_mask", "coordinates"]}}}
+
 def main(config):
     # Gather all hyperparams
     epochs=config.get('epochs')
@@ -264,7 +289,7 @@ def main(config):
     weights={'wN':wN,'w0':w0,'w1':w1,'w2':w2,'wW':wW}
 
     # Data Loaders
-    dataloader_kwargs.update({'select_keys': input_variables + ['range_folded_mask', 'coordinates']})
+    dataloader_kwargs.update({'select_keys': input_variables + [ "range_folded_mask", "coordinates","rng_lower","rng_upper","az_lower","az_upper"]})
     import tensorflow_datasets as tfds
     import tornet.data.tfds.tornet.tornet_dataset_builder
 

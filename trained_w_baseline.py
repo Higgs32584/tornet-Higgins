@@ -5,12 +5,10 @@ import shutil
 import logging
 import numpy as np
 import tensorflow as tf
-import tensorflow_datasets as tfds
 from tensorflow import keras
 from tensorflow.keras.layers import (
     BatchNormalization,
     Add,
-    Activation,
     MaxPool2D,
     Dropout,
     GlobalAveragePooling2D,
@@ -18,74 +16,27 @@ from tensorflow.keras.layers import (
     Multiply,
     Conv2D,
     GlobalMaxPooling2D,
-    Reshape
-
+    Reshape,
+    ReLU
 )
-class FalseAlarmRate(tf.keras.metrics.Metric):
-    def __init__(self, name="false_alarm_rate", **kwargs):
-        super().__init__(name=name, **kwargs)
-        self.false_positives = self.add_weight(name="fp", initializer="zeros")
-        self.true_positives = self.add_weight(name="tp", initializer="zeros")
-        self.epsilon = 1e-7
-
-    def update_state(self, y_true, y_pred, sample_weight=None):
-        y_pred = tf.cast(y_pred > 0.5, tf.float32)  # Binary predictions
-        y_true = tf.cast(y_true, tf.float32)
-
-        fp = tf.reduce_sum((1 - y_true) * y_pred)
-        tp = tf.reduce_sum(y_true * y_pred)
-
-        self.false_positives.assign_add(fp)
-        self.true_positives.assign_add(tp)
-
-    def result(self):
-        return self.false_positives / (self.false_positives + self.true_positives + self.epsilon)
-
-    def reset_states(self):
-        self.false_positives.assign(0)
-        self.true_positives.assign(0)
-
-class ThreatScore(tf.keras.metrics.Metric):
-    def __init__(self, name="threat_score", **kwargs):
-        super().__init__(name=name, **kwargs)
-        self.tp = self.add_weight(name="tp", initializer="zeros")
-        self.fp = self.add_weight(name="fp", initializer="zeros")
-        self.fn = self.add_weight(name="fn", initializer="zeros")
-        self.epsilon = 1e-7
-
-    def update_state(self, y_true, y_pred, sample_weight=None):
-        y_pred = tf.cast(y_pred > 0.5, tf.float32)
-        y_true = tf.cast(y_true, tf.float32)
-        self.tp.assign_add(tf.reduce_sum(y_true * y_pred))
-        self.fp.assign_add(tf.reduce_sum((1 - y_true) * y_pred))
-        self.fn.assign_add(tf.reduce_sum(y_true * (1 - y_pred)))
-
-    def result(self):
-        return self.tp / (self.tp + self.fp + self.fn + self.epsilon)
-
-    def reset_states(self):
-        self.tp.assign(0)
-        self.fp.assign(0)
-        self.fn.assign(0)
-
-
-from typing import List, Tuple
 from tensorflow.keras.optimizers import AdamW
 from tensorflow.keras.optimizers.schedules import CosineDecayRestarts
+from typing import List, Tuple
 from tornet.data.loader import get_dataloader
+from tornet.data import preprocess as pp
 from tornet.data.preprocess import get_shape
 from tornet.data.constants import ALL_VARIABLES, CHANNEL_MIN_MAX
 from tornet.metrics.keras import metrics as tfm
-from tornet.utils.general import make_exp_dir, make_callback_dirs
-from tornet.models.keras.layers import CoordConv2D, FillNaNs
+from tornet.utils.general import make_exp_dir
+from custom_func import FalseAlarmRate, ThreatScore
+import tensorflow_datasets as tfds
+from tornet.models.keras.layers import CoordConv2D
 import tornet.data.tfds.tornet.tornet_dataset_builder
+import random
 
 logging.basicConfig(level=logging.ERROR)
 SEED = 42  
-
 # Set random seeds for reproducibility
-import random
-SEED = 42
 os.environ['PYTHONHASHSEED'] = str(SEED)
 random.seed(SEED)
 np.random.seed(SEED)
@@ -96,10 +47,83 @@ TORNET_ROOT=DATA_ROOT
 TFDS_DATA_DIR = DATA_ROOT
 EXP_DIR = "."
 os.environ['TORNET_ROOT'] = DATA_ROOT
+#os.environ['TF_CUDNN_USE_AUTOTUNE'] = '1'
+os.environ['PYTHONHASHSEED'] = str(SEED)
 os.environ['TFDS_DATA_DIR'] = TFDS_DATA_DIR
+
+# Enable GPU Memory Growth
+gpus = tf.config.experimental.list_physical_devices('GPU')
+if gpus:
+    for gpu in gpus:
+        tf.config.experimental.set_memory_growth(gpu, True)
+
+strategy = tf.distribute.OneDeviceStrategy(device="/GPU:0")
 
 
 logging.info(f'TORNET_ROOT={DATA_ROOT}')
+
+@keras.utils.register_keras_serializable()
+class FillNaNs(keras.layers.Layer):
+    def __init__(self, fill_val, **kwargs):
+        super().__init__(**kwargs)
+        self.fill_val = tf.convert_to_tensor(fill_val, dtype=tf.float32)
+    @tf.function(jit_compile=True)
+    def call(self, x):
+        return tf.where(tf.math.is_nan(x), self.fill_val, x)
+
+    def get_config(self):
+        return {**super().get_config(), "fill_val": self.fill_val.numpy().item()}
+
+import os
+import numpy as np
+import tensorflow as tf
+from tqdm import tqdm
+
+def get_or_create_baseline_preds(baseline_model, dataset, year, split, output_dir="baseline_preds"):
+    os.makedirs(output_dir, exist_ok=True)
+    fname = os.path.join(output_dir, f"{year}_{split}_probs.npz")
+
+    if os.path.exists(fname):
+        print(f"[INFO] Loading cached baseline predictions from: {fname}")
+        probs = np.load(fname)["probs"]
+        return probs
+
+    print(f"[INFO] Generating baseline predictions for {year} {split}...")
+    all_probs = []
+
+    for batch in tqdm(dataset, desc=f"Baseline inference {year}_{split}"):
+        x, _,_ = batch
+        probs = baseline_model(x, training=False).numpy()
+        all_probs.append(probs)
+
+    all_probs = np.concatenate(all_probs, axis=0)
+    np.savez_compressed(fname, probs=all_probs)
+    print(f"[INFO] Saved baseline predictions to: {fname}")
+    return all_probs
+
+def add_baseline_probs_to_dataset(dataset, baseline_probs):
+    def gen():
+        i = 0
+        for x, y,_ in dataset:
+            batch_size = x[list(x.keys())[0]].shape[0]
+            baseline_slice = baseline_probs[i:i + batch_size]
+            # Ensure shape [batch_size, 1]
+            baseline_tensor = tf.reshape(tf.convert_to_tensor(baseline_slice, dtype=tf.float32), (batch_size, 1))
+            x["baseline_prob"] = baseline_tensor
+            i += batch_size
+            yield x, y
+
+    # Get example input/output to build output_signature
+    input_sample = next(iter(dataset))
+
+    # Build input spec dictionary
+    input_spec = {k: tf.TensorSpec(shape=v.shape, dtype=v.dtype) for k, v in input_sample[0].items()}
+    input_spec["baseline_prob"] = tf.TensorSpec(shape=(None, 1), dtype=tf.float32)
+
+    # Build output signature for the label
+    output_spec = tf.TensorSpec(shape=input_sample[1].shape, dtype=input_sample[1].dtype)
+
+    return tf.data.Dataset.from_generator(gen, output_signature=(input_spec, output_spec))
 
 def build_model(model='wide_resnet',shape:Tuple[int]=(120,240,2),
                 c_shape:Tuple[int]=(120,240,2),
@@ -107,8 +131,7 @@ def build_model(model='wide_resnet',shape:Tuple[int]=(120,240,2),
                 start_filters:int=64,
                 l2_reg:float=0.001,
                 background_flag:float=-3.0,
-                include_range_folded:bool=True,dropout_rate=0.1):
-    # Create input layers for each input_variables
+                include_range_folded:bool=True,include_prob=True,dropout_rate=0.1):
     inputs = {}
     for v in input_variables:
         inputs[v]=keras.Input(shape,name=v)
@@ -131,7 +154,11 @@ def build_model(model='wide_resnet',shape:Tuple[int]=(120,240,2),
         
     # Input coordinate information
     cin=keras.Input(c_shape,name='coordinates')
-    inputs['coordinates']=cin
+    inputs['coordinates'] = cin
+    baseline_prob = keras.Input(shape=(1,), name='baseline_prob')
+    inputs['baseline_prob'] = baseline_prob
+
+
     
     x,c = normalized_inputs,cin
     
@@ -140,19 +167,21 @@ def build_model(model='wide_resnet',shape:Tuple[int]=(120,240,2),
         x, c = wide_resnet_block(x, c, filters=start_filters*2, widen_factor=2, l2_reg=l2_reg,nconvs=3, drop_rate=dropout_rate)
         x, c = wide_resnet_block(x, c, filters=start_filters*4, widen_factor=2, l2_reg=l2_reg,nconvs=3, drop_rate=dropout_rate)
         x=se_block(x)
-    x = Conv2D(128, 3, padding='same', activation='relu')(x)
+    x = Conv2D(128, 3, padding='same', use_bias=False)(x)  # <-- no bias
     x = BatchNormalization()(x)
-    attention_map = Conv2D(1, 1, activation='sigmoid', name='attention_map')(x)  # shape (B, H, W, 1)
-    attention_map = Dropout(rate=0.2, name='attention_dropout')(attention_map)
+    x = ReLU()(x)
+    attention_map = Conv2D(1, 1, activation='sigmoid', name='attention_map',use_bias=False)(x)  # shape (B, H, W, 1)
     x_weighted = Multiply()([x, attention_map])
 
     x_avg = GlobalAveragePooling2D()(x_weighted)
     x_max = GlobalMaxPooling2D()(x_weighted)
     x_concat = keras.layers.Concatenate()([x_avg, x_max])
+    if "baseline_prob" in inputs:
+        x_concat = keras.layers.Concatenate()([x_concat, baseline_prob])
 
 
     x_dense = Dense(64, activation='relu')(x_concat)
-    output = Dense(1, activation='sigmoid', name='output')(x_dense)
+    output = Dense(1, activation='sigmoid', dtype='float32')(x_dense)
     return keras.Model(inputs=inputs,outputs=output)
 
 def se_block(x, ratio=16, name=None):
@@ -172,7 +201,7 @@ def se_block(x, ratio=16, name=None):
     x = Multiply(name=f"{name}_scale" if name else None)([x, se])
     return x
 
-
+@keras.utils.register_keras_serializable()
 def wide_resnet_block(x, c, filters=64, widen_factor=2, l2_reg=1e-6, drop_rate=0.0,nconvs=2):
     """Wide ResNet Block with CoordConv2D"""
     shortcut_x, shortcut_c = x, c  # Skip connection
@@ -190,7 +219,7 @@ def wide_resnet_block(x, c, filters=64, widen_factor=2, l2_reg=1e-6, drop_rate=0
     
 
     # Add Residual Connection
-    x = Activation('relu')(x)
+    x = ReLU()(x)
     x = Add()([x, shortcut_x])
 
     # Pooling and dropout
@@ -201,48 +230,68 @@ def wide_resnet_block(x, c, filters=64, widen_factor=2, l2_reg=1e-6, drop_rate=0
         x = Dropout(rate=drop_rate)(x)
     
     return x, c
+@keras.utils.register_keras_serializable()
+class FastNormalize(keras.layers.Layer):
+    def __init__(self, mean, std, **kwargs):
+        super().__init__(**kwargs)
+        self.mean = tf.convert_to_tensor(mean, dtype=tf.float32)
+        self.std = tf.convert_to_tensor(std, dtype=tf.float32)
+        self._mean_list = mean.numpy().tolist() if hasattr(mean, 'numpy') else list(mean)
+        self._std_list = std.numpy().tolist() if hasattr(std, 'numpy') else list(std)
 
+    def call(self, x):
+        return tf.math.subtract(x, self.mean) / (self.std + 1e-6)
 
+    def get_config(self):
+        config = super().get_config()
+        config.update({
+            "mean": self._mean_list,
+            "std": self._std_list,
+        })
+        return config
 
-def normalize(x,
-              name:str):
-    """
-    Channel-wise normalization using known CHANNEL_MIN_MAX
-    """
-    min_max = np.array(CHANNEL_MIN_MAX[name]) # [2,]
-    n_sweeps=x.shape[-1]
-    
-    # choose mean,var to get approximate [-1,1] scaling
-    var=((min_max[1]-min_max[0])/2)**2 # scalar
-    var=np.array(n_sweeps*[var,])    # [n_sweeps,]
-    
-    offset=(min_max[0]+min_max[1])/2    # scalar
-    offset=np.array(n_sweeps*[offset,]) # [n_sweeps,]
+def normalize(x, name: str):
+    min_val, max_val = CHANNEL_MIN_MAX[name]
+    mean = np.float32((max_val + min_val) / 2)
+    std = np.float32((max_val - min_val) / 2)
+    n_sweeps = x.shape[-1]
 
-    return keras.layers.Normalization(mean=offset,
-                                         variance=var,
-                                         name='Normalize_%s' % name)(x)
+    # Use tf.constant directly for faster graph compilation
+    mean = tf.constant([mean] * n_sweeps, dtype=tf.float32)
+    std = tf.constant([std] * n_sweeps, dtype=tf.float32)
 
-# Enable GPU Memory Growth
-gpus = tf.config.experimental.list_physical_devices('GPU')
-if gpus:
-    for gpu in gpus:
-        tf.config.experimental.set_memory_growth(gpu, True)
+    return FastNormalize(mean, std)(x)
 
-strategy = tf.distribute.MirroredStrategy()
-#os.environ['TF_CUDNN_USE_AUTOTUNE'] = '0'
+DEFAULT_CONFIG={"epochs":100, 
+                "baseline_model_path": "/home/ubuntu/tornet-Higgins/best_models_so_far/tornadoDetector_014.keras",
+                "input_variables": ["DBZ", "VEL", "KDP", "ZDR","RHOHV","WIDTH"], 
+                "train_years": [2013,2014,2015,2016,2017,2018,2019,2020], 
+                "val_years": [2021,2022], "batch_size": 128
+                , "model": "wide_resnet", 
+                "start_filters": 48, 
+                "learning_rate": 0.0001596, 
+                "first_decay_steps": 2221, 
+                "weight_decay": 0.0,
+                "dropout_rate": 0.0, 
+                "l2_reg": 0.0,
+                "wN": 0.05069,
+                    "w0": 0.55924,
+                    "w1": 3.49593,
+                    "w2": 11.26479,
+                    "wW": 0.20101,
+                  "label_smooth": 0.1, 
+                "loss": "cce", "head": "maxpool", "exp_name": "tornado_baseline", "exp_dir": ".",
+                  "dataloader": "tensorflow-tfds", 
+                  "dataloader_kwargs": {"select_keys": ["DBZ", "VEL", "KDP", "RHOHV", "ZDR", "WIDTH", "range_folded_mask", "coordinates"]}}
 
-#tf.config.optimizer.set_jit(True)  # Enable XLA (Accelerated Linear Algebra)
-logging.info(f"Number of devices: {strategy.num_replicas_in_sync}")
-# Default Configuration
-DEFAULT_CONFIG={"epochs":100, "input_variables": ["DBZ", "VEL", "KDP", "ZDR","RHOHV","WIDTH"], "train_years": [2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020], "val_years": [2021, 2022], "batch_size": 64, "model": "wide_resnet", "start_filters": 48, "learning_rate": 3e-4, "decay_steps": 1386, "decay_rate": 0.958,"dropout_rate":0.1, "l2_reg": 1e-4, "wN": 0.25, "wW": 0.75, "w0": 3.0, "w1": 5.0, "w2": 8.0, "label_smooth": 0.1,"loss": "cce", "head": "maxpool", "exp_name": "tornado_baseline", "exp_dir": ".","dataloader": "tensorflow-tfds", "dataloader_kwargs": {"select_keys": ["DBZ", "VEL", "KDP", "RHOHV", "ZDR", "WIDTH", "range_folded_mask", "coordinates","rng_lower","rng_upper","az_lower","az_upper"]}}
 def main(config):
     # Gather all hyperparams
+    baseline_path = config.get("baseline_model_path")
     epochs=config.get('epochs')
     batch_size=config.get('batch_size')
     start_filters=config.get('start_filters')
     dropout_rate=config.get('dropout_rate')
-
+    first_decay_steps=config.get('first_decay_steps')
     lr=config.get('learning_rate')
     l2_reg=config.get('l2_reg')
     wN=config.get('wN')
@@ -258,36 +307,52 @@ def main(config):
     val_years=config.get('val_years')
     dataloader=config.get('dataloader')
     dataloader_kwargs = config.get('dataloader_kwargs')
+    print(f"Loading baseline model from: {baseline_path}")
+    baseline_model = keras.models.load_model(baseline_path, compile=False)
     
     logging.info(f'Using {dataloader} dataloader')
     logging.info(f'Running with config: {config}')
     weights={'wN':wN,'w0':w0,'w1':w1,'w2':w2,'wW':wW}
-
-    # Data Loaders
-    dataloader_kwargs.update({'select_keys': input_variables + ['range_folded_mask', 'coordinates']})
-    import tensorflow_datasets as tfds
     import tornet.data.tfds.tornet.tornet_dataset_builder
-
-    # Apply to Train and Validation Data
+    # Data Loaders    # Apply to Train and Validation Data
     ds_train = get_dataloader(dataloader, DATA_ROOT, train_years, "train", batch_size, weights, **dataloader_kwargs)
     ds_val = get_dataloader(dataloader, DATA_ROOT, val_years, "train", batch_size, {'wN':1.0,'w0':1.0,'w1':1.0,'w2':1.0,'wW':1.0}, **dataloader_kwargs)
 
-    x, _, _ = next(iter(ds_train))
+    # Precompute or load cached baseline predictions
+    train_probs = []
+    for year in train_years:
+        ds_year = get_dataloader(dataloader, DATA_ROOT, [year], "train", batch_size, weights, **dataloader_kwargs)
+        train_probs.append(get_or_create_baseline_preds(baseline_model, ds_year, year, "train"))
+
+    val_probs = []
+    for year in val_years:
+        ds_year = get_dataloader(dataloader, DATA_ROOT, [year], "train", batch_size, weights, **dataloader_kwargs)
+        val_probs.append(get_or_create_baseline_preds(baseline_model, ds_year, year, "train"))
+
+    # Concatenate all years’ baseline preds
+    train_probs = np.concatenate(train_probs, axis=0)
+    val_probs = np.concatenate(val_probs, axis=0)
+
+    # Inject into original datasets
+    ds_train = add_baseline_probs_to_dataset(ds_train, train_probs)
+    ds_val = add_baseline_probs_to_dataset(ds_val, val_probs)
+
+
+
+    dataloader_kwargs.update({'select_keys': input_variables + ['range_folded_mask', 'coordinates']})
+
     
-    in_shapes = (None, None, get_shape(x)[-1])
-    c_shapes = (None, None, x["coordinates"].shape[-1])
+    x, _ = next(iter(ds_train))
+    in_shapes = (120, 240, get_shape(x)[-1])
+    c_shapes = (120, 240, x["coordinates"].shape[-1])
     nn = build_model(model=model,shape=in_shapes, c_shape=c_shapes, start_filters=start_filters, 
-                         l2_reg=l2_reg, input_variables=input_variables,dropout_rate=dropout_rate)
-    print(nn.summary())
-    
+                    l2_reg=l2_reg, input_variables=input_variables,dropout_rate=dropout_rate,include_prob=True)    
     # Loss Function
-    import tensorflow as tf
-    from tensorflow.keras import backend as K
     # Optimizer with Learning Rate Decay
     from_logits=False
 
-    from tensorflow.keras.losses import BinaryCrossentropy,Tversky
     def focal_loss(gamma=2.0, alpha=0.85):
+        @tf.function(jit_compile=True)
         def loss_fn(y_true, y_pred):
             epsilon = tf.keras.backend.epsilon()
             y_pred = tf.clip_by_value(y_pred, epsilon, 1. - epsilon)
@@ -300,6 +365,7 @@ def main(config):
         alpha = weight for FP
         beta = weight for FN
         """
+        @tf.function(jit_compile=True)
         def loss_fn(y_true, y_pred):
             y_true = tf.cast(y_true, tf.float32)
             y_pred = tf.cast(y_pred, tf.float32)
@@ -312,19 +378,17 @@ def main(config):
         return lambda y_true, y_pred: alpha * tversky_loss(alpha=0.5, beta=0.5)(y_true, y_pred) + \
                                     (1 - alpha) * focal_loss(gamma=2.0, alpha=0.85)(y_true, y_pred)
     loss = combo_loss()
-    
-    # Optimizer with Learnindg Rate Decay
 
     lr_schedule = CosineDecayRestarts(
-        initial_learning_rate=lr,
-        first_decay_steps=2038,  # 1 epoch
+        initial_learning_rate=config["learning_rate"],
+        first_decay_steps=first_decay_steps,  # 1 epoch
         t_mul=2.0,               # each cycle doubles
-        m_mul=0.9                # restart peak decays slightly
+        m_mul=0.9              # restart peak decays slightly
     )
 
     opt = AdamW(
         learning_rate=lr_schedule,
-        weight_decay=1e-4,
+        weight_decay=config["weight_decay"],
         beta_1=0.9,
         beta_2=0.999,
         epsilon=1e-7
@@ -338,7 +402,6 @@ def main(config):
                 tfm.FalseNegatives(from_logits,name='FalseNegatives'), 
                 tfm.Precision(from_logits,name='Precision'), 
                 tfm.Recall(from_logits,name='Recall'),
-                FalseAlarmRate(name='FalseAlarmRate'),
                 tfm.F1Score(from_logits=from_logits,name='F1'),
                 ThreatScore(name='ThreatScore')]
     
@@ -369,9 +432,22 @@ def main(config):
     # TensorBoard Logging
     if keras.config.backend() == "tensorflow":
         callbacks.append(keras.callbacks.TensorBoard(log_dir=os.path.join(expdir, 'logs'), write_graph=False))
-    
-    # Train Model
-    history = nn.fit(ds_train, epochs=epochs, validation_data=ds_val, callbacks=callbacks, verbose=1)
+
+    train_size = len(train_probs)
+    val_size = len(val_probs)
+    steps_per_epoch = int(np.ceil(train_size / batch_size))
+    validation_steps = int(np.ceil(val_size / batch_size))
+
+    # Fit with progress tracking
+    history = nn.fit(
+        ds_train,
+        epochs=epochs,
+        steps_per_epoch=steps_per_epoch,
+        validation_data=ds_val,
+        validation_steps=validation_steps,
+        callbacks=callbacks,
+        verbose=1  # You can also use 2 or 0 depending on your logging preference
+    )
     
     # Get Best Metrics
     best_aucpr = max(history.history.get('val_AUCPR', [0]))

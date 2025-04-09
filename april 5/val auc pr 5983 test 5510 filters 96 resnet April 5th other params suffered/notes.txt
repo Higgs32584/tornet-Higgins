@@ -1,0 +1,4 @@
+doubled number of starting layers from 48 to 96, wanted to see if wider networks with shallower depths led to
+increased performance. Based off of the belief that the model has gradually improved as layers have been removed
+from the model.
+ 

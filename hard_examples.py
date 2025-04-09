@@ -79,7 +79,8 @@ from tornet.metrics.keras import metrics as tfm
 from tornet.utils.general import make_exp_dir, make_callback_dirs
 from tornet.models.keras.layers import CoordConv2D, FillNaNs
 import tornet.data.tfds.tornet.tornet_dataset_builder
-
+tf.config.threading.set_intra_op_parallelism_threads(0)
+tf.config.threading.set_inter_op_parallelism_threads(0)
 logging.basicConfig(level=logging.ERROR)
 SEED = 42  
 
@@ -91,15 +92,75 @@ random.seed(SEED)
 np.random.seed(SEED)
 tf.random.set_seed(SEED)
 # Environment Variables
-DATA_ROOT = '/home/ubuntu/tfds'
+DATA_ROOT = '/home/ubuntu/tornet-Higgins/evaluation_results/'
+VAL_ROOT = '/home/ubuntu/tfds'
+
 TORNET_ROOT=DATA_ROOT
-TFDS_DATA_DIR = DATA_ROOT
+TFDS_DATA_DIR = VAL_ROOT
 EXP_DIR = "."
 os.environ['TORNET_ROOT'] = DATA_ROOT
 os.environ['TFDS_DATA_DIR'] = TFDS_DATA_DIR
+os.environ["XLA_FLAGS"] = "--xla_gpu_strict_conv_algorithm_picker=false"
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '2' 
+os.environ["TF_DISABLE_LAYOUT_OPTIMIZER"] = "1"
 
+import glob
+import tensorflow as tf
 
-logging.info(f'TORNET_ROOT={DATA_ROOT}')
+def decode_serialized_tensors(example):
+    x = {}
+    for key in example:
+        if key == "label":
+            continue
+        x[key] = tf.io.parse_tensor(example[key], out_type=tf.float32)
+        x[key] = tf.ensure_shape(x[key], [120, 240, 2])
+    y = tf.cast(example["label"], tf.float32)
+    return x, y
+
+def count_examples_in_tfrecords(path_pattern):
+    files = sorted(glob.glob(path_pattern))
+    return sum(1 for _ in tf.data.TFRecordDataset(files))
+
+def load_tfrecord_dataset(path_pattern="tfrecords/*.tfrecord", batch_size=128, shuffle=True):
+    files = sorted(glob.glob(path_pattern))
+    if not files:
+        raise FileNotFoundError(f"No TFRecord files found matching: {path_pattern}")
+
+    # Count examples
+    num_examples = sum(1 for _ in tf.data.TFRecordDataset(files))
+    steps_per_epoch = num_examples // batch_size
+
+    # Feature schema
+    feature_description = {
+        "label": tf.io.FixedLenFeature([], tf.int64),
+        "coordinates": tf.io.FixedLenFeature([], tf.string),
+        "range_folded_mask": tf.io.FixedLenFeature([], tf.string),
+        "DBZ": tf.io.FixedLenFeature([], tf.string),
+        "VEL": tf.io.FixedLenFeature([], tf.string),
+        "KDP": tf.io.FixedLenFeature([], tf.string),
+        "ZDR": tf.io.FixedLenFeature([], tf.string),
+        "RHOHV": tf.io.FixedLenFeature([], tf.string),
+        "WIDTH": tf.io.FixedLenFeature([], tf.string),
+    }
+
+    def _parse_fn(example_proto):
+        parsed = tf.io.parse_single_example(example_proto, feature_description)
+        return decode_serialized_tensors(parsed)
+
+    dataset = tf.data.TFRecordDataset(files, num_parallel_reads=tf.data.AUTOTUNE)
+    dataset = dataset.map(_parse_fn, num_parallel_calls=tf.data.AUTOTUNE)
+
+    if shuffle:
+        dataset = dataset.shuffle(buffer_size=1000)
+
+    dataset = dataset.batch(batch_size)
+    dataset = dataset.prefetch(tf.data.AUTOTUNE)
+
+    # Make Keras aware of cardinality
+    dataset = dataset.apply(tf.data.experimental.assert_cardinality(steps_per_epoch))
+
+    return dataset, steps_per_epoch
+
 
 def build_model(model='wide_resnet',shape:Tuple[int]=(120,240,2),
                 c_shape:Tuple[int]=(120,240,2),
@@ -145,7 +206,6 @@ def build_model(model='wide_resnet',shape:Tuple[int]=(120,240,2),
     attention_map = Conv2D(1, 1, activation='sigmoid', name='attention_map')(x)  # shape (B, H, W, 1)
     attention_map = Dropout(rate=0.2, name='attention_dropout')(attention_map)
     x_weighted = Multiply()([x, attention_map])
-
     x_avg = GlobalAveragePooling2D()(x_weighted)
     x_max = GlobalMaxPooling2D()(x_weighted)
     x_concat = keras.layers.Concatenate()([x_avg, x_max])
@@ -223,23 +283,34 @@ def normalize(x,
                                          variance=var,
                                          name='Normalize_%s' % name)(x)
 
-# Enable GPU Memory Growth
 gpus = tf.config.experimental.list_physical_devices('GPU')
 if gpus:
-    for gpu in gpus:
-        tf.config.experimental.set_memory_growth(gpu, True)
+    tf.config.experimental.set_memory_growth(gpus[0], True)
 
-strategy = tf.distribute.MirroredStrategy()
-#os.environ['TF_CUDNN_USE_AUTOTUNE'] = '0'
+os.environ['TF_CUDNN_USE_AUTOTUNE'] = '1'
+strategy = tf.distribute.OneDeviceStrategy(device="/GPU:0")
 
-#tf.config.optimizer.set_jit(True)  # Enable XLA (Accelerated Linear Algebra)
-logging.info(f"Number of devices: {strategy.num_replicas_in_sync}")
+tf.config.optimizer.set_jit(True)  # Enable XLA (Accelerated Linear Algebra)
 # Default Configuration
-DEFAULT_CONFIG={"epochs":100, "input_variables": ["DBZ", "VEL", "KDP", "ZDR","RHOHV","WIDTH"], "train_years": [2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020], "val_years": [2021, 2022], "batch_size": 64, "model": "wide_resnet", "start_filters": 48, "learning_rate": 3e-4, "decay_steps": 1386, "decay_rate": 0.958,"dropout_rate":0.1, "l2_reg": 1e-4, "wN": 0.25, "wW": 0.75, "w0": 3.0, "w1": 5.0, "w2": 8.0, "label_smooth": 0.1,"loss": "cce", "head": "maxpool", "exp_name": "tornado_baseline", "exp_dir": ".","dataloader": "tensorflow-tfds", "dataloader_kwargs": {"select_keys": ["DBZ", "VEL", "KDP", "RHOHV", "ZDR", "WIDTH", "range_folded_mask", "coordinates","rng_lower","rng_upper","az_lower","az_upper"]}}
+DEFAULT_CONFIG={"epochs":100, 
+                "input_variables": ["DBZ", "VEL", "KDP", "ZDR","RHOHV","WIDTH"], 
+                "train_years": [2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020], 
+                "val_years": [2021, 2022], "batch_size": 128
+                , "model": "wide_resnet", 
+                "start_filters": 48, 
+                "learning_rate": 1e-4, 
+                "decay_steps": 1386, 
+                "decay_rate": 0.958,
+                "dropout_rate":0.1, 
+                "l2_reg": 1e-4, "wN": 5.41, "wW": 5.41, "w0": 1.0, "w1": 1.0, "w2": 1.0, "label_smooth": 0.1, 
+                "loss": "cce", "head": "maxpool", "exp_name": "tornado_baseline", "exp_dir": ".",
+                  "dataloader": "tensorflow-tfds", 
+                  "dataloader_kwargs": {"select_keys": ["DBZ", "VEL", "KDP", "RHOHV", "ZDR", "WIDTH", "range_folded_mask", "coordinates","rng_lower","rng_upper","az_lower","az_upper"]}}
 def main(config):
+    import tensorflow as tf
     # Gather all hyperparams
+    config=DEFAULT_CONFIG.copy()
     epochs=config.get('epochs')
-    batch_size=config.get('batch_size')
     start_filters=config.get('start_filters')
     dropout_rate=config.get('dropout_rate')
 
@@ -247,6 +318,7 @@ def main(config):
     l2_reg=config.get('l2_reg')
     wN=config.get('wN')
     w0=config.get('w0')
+    batch_size=config.get('batch_size')
     w1=config.get('w1')
     w2=config.get('w2')
     wW=config.get('wW')
@@ -265,24 +337,23 @@ def main(config):
 
     # Data Loaders
     dataloader_kwargs.update({'select_keys': input_variables + ['range_folded_mask', 'coordinates']})
-    import tensorflow_datasets as tfds
-    import tornet.data.tfds.tornet.tornet_dataset_builder
 
     # Apply to Train and Validation Data
-    ds_train = get_dataloader(dataloader, DATA_ROOT, train_years, "train", batch_size, weights, **dataloader_kwargs)
-    ds_val = get_dataloader(dataloader, DATA_ROOT, val_years, "train", batch_size, {'wN':1.0,'w0':1.0,'w1':1.0,'w2':1.0,'wW':1.0}, **dataloader_kwargs)
 
-    x, _, _ = next(iter(ds_train))
+    #ds_train = load_multiinput_npz_dir_as_dataset('evaluation_results/',batch_size=batch_size)
+    ds_train, steps_per_epoch = load_tfrecord_dataset("tfrecords/*.tfrecord", batch_size=batch_size)
+
+    import tensorflow_datasets as tfds
+    import tornet.data.tfds.tornet.tornet_dataset_builder
+    ds_val = get_dataloader(dataloader, VAL_ROOT, val_years, "train", batch_size, {'wN':1.0,'w0':1.0,'w1':1.0,'w2':1.0,'wW':1.0}, **dataloader_kwargs)
+    
+    x, y = next(iter(ds_train))
     
     in_shapes = (None, None, get_shape(x)[-1])
     c_shapes = (None, None, x["coordinates"].shape[-1])
     nn = build_model(model=model,shape=in_shapes, c_shape=c_shapes, start_filters=start_filters, 
                          l2_reg=l2_reg, input_variables=input_variables,dropout_rate=dropout_rate)
-    print(nn.summary())
     
-    # Loss Function
-    import tensorflow as tf
-    from tensorflow.keras import backend as K
     # Optimizer with Learning Rate Decay
     from_logits=False
 
@@ -313,7 +384,7 @@ def main(config):
                                     (1 - alpha) * focal_loss(gamma=2.0, alpha=0.85)(y_true, y_pred)
     loss = combo_loss()
     
-    # Optimizer with Learnindg Rate Decay
+    # # Optimizer with Learnindg Rate Decay
 
     lr_schedule = CosineDecayRestarts(
         initial_learning_rate=lr,
@@ -371,7 +442,10 @@ def main(config):
         callbacks.append(keras.callbacks.TensorBoard(log_dir=os.path.join(expdir, 'logs'), write_graph=False))
     
     # Train Model
-    history = nn.fit(ds_train, epochs=epochs, validation_data=ds_val, callbacks=callbacks, verbose=1)
+    tfrecord_files = sorted(glob.glob("tfrecords/*.tfrecord"))
+
+    num_examples = sum(1 for _ in tf.data.TFRecordDataset(tfrecord_files))
+    history = nn.fit(ds_train, epochs=epochs, validation_data=ds_val, callbacks=callbacks, steps_per_epoch=steps_per_epoch,verbose=1)
     
     # Get Best Metrics
     best_aucpr = max(history.history.get('val_AUCPR', [0]))

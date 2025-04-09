@@ -1,0 +1,5 @@
+wanted to see if expanding layers from 200k to 800k improved performance
+outlook was slightly better for validation,worse for test
+
+result:
+AUC_PR dropped, more blocks do not equal better outcomes.

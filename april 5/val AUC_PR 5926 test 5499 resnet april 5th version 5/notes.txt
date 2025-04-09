@@ -1,0 +1,2 @@
+wanted to see if a bare bones model was more successful, as well as batch_norm before CoordConv2D
+beat baseline, improved performance in both validation and test
