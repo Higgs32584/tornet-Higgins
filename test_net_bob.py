@@ -17,7 +17,10 @@ from tensorflow.keras.layers import (
     Conv2D,
     GlobalMaxPooling2D,
     Reshape,
-    ReLU
+    ReLU,
+    Lambda,
+    Conv1D,
+    Flatten
 )
 from tensorflow.keras.optimizers import AdamW
 from tensorflow.keras.optimizers.schedules import CosineDecayRestarts
@@ -49,6 +52,23 @@ EXP_DIR = "."
 os.environ['TORNET_ROOT'] = DATA_ROOT
 os.environ['TFDS_DATA_DIR'] = TFDS_DATA_DIR
 os.environ["TF_XLA_FLAGS"] = "--tf_xla_auto_jit=2"
+class GateScoreMonitor(tf.keras.callbacks.Callback):
+    def __init__(self, model, gate_layer_name='gate_score', val_data=None):
+        super().__init__()
+        self.gate_layer = model.get_layer(gate_layer_name)
+        self.gate_output_fn = tf.keras.backend.function(model.inputs, [self.gate_layer.output])
+        self.val_data = val_data
+
+    def on_epoch_end(self, epoch, logs=None):
+        # Grab a small validation batch
+        for x_val, *_ in self.val_data.take(1):
+            gate_scores = self.gate_output_fn(x_val)[0]
+            flat = tf.reshape(gate_scores, [-1])
+            mean = tf.reduce_mean(flat).numpy()
+            std = tf.math.reduce_std(flat).numpy()
+            print(f"\n[GateScoreMonitor] Epoch {epoch}: Mean={mean:.4f}, Std={std:.4f}")
+            break
+
 
 
 logging.info(f'TORNET_ROOT={DATA_ROOT}')
@@ -74,53 +94,76 @@ def build_model(model='wide_resnet',shape:Tuple[int]=(120,240,2),
                 l2_reg:float=0.001,
                 background_flag:float=-3.0,
                 include_range_folded:bool=True,dropout_rate=0.1):
+    
     # Create input layers for each input_variables
     inputs = {}
     for v in input_variables:
-        inputs[v]=keras.Input(shape,name=v)
-    n_sweeps=shape[2]
-    
-    # Normalize inputs and concate along channel dim
-    normalized_inputs=keras.layers.Concatenate(axis=-1,name='Concatenate1')(
-        [normalize(inputs[v],v) for v in input_variables]
-        )
+        inputs[v] = keras.Input(shape, name=v)
+    n_sweeps = shape[2]
 
-    # Replace nan pixel with background flag
+    # Normalize and concatenate
+    normalized_inputs = keras.layers.Concatenate(axis=-1, name='Concatenate1')(
+        [normalize(inputs[v], v) for v in input_variables]
+    )
     normalized_inputs = FillNaNs(background_flag)(normalized_inputs)
 
-    # Add channel for range folded gates
+    # Add range folded mask if applicable
     if include_range_folded:
-        range_folded = keras.Input(shape[:2]+(n_sweeps,),name='range_folded_mask')
-        inputs['range_folded_mask']=range_folded
-        normalized_inputs = keras.layers.Concatenate(axis=-1,name='Concatenate2')(
-               [normalized_inputs,range_folded])
-        
-    # Input coordinate information
-    cin=keras.Input(c_shape,name='coordinates')
-    inputs['coordinates']=cin
-    
-    x,c = normalized_inputs,cin
-    
-    if model == 'wide_resnet':
-        x, c = wide_resnet_block(x, c, filters=start_filters, widen_factor=2, l2_reg=l2_reg,nconvs=nconvs, drop_rate=dropout_rate)
-        #x, c = wide_resnet_block(x, c, filters=start_filters*2, widen_factor=2, l2_reg=l2_reg,nconvs=nconvs, drop_rate=dropout_rate)
-        #x, c = wide_resnet_block(x, c, filters=start_filters*4, widen_factor=2, l2_reg=l2_reg,nconvs=nconvs, drop_rate=dropout_rate)
-        x=se_block(x)
+        range_folded = keras.Input(shape[:2] + (n_sweeps,), name='range_folded_mask')
+        inputs['range_folded_mask'] = range_folded
+        normalized_inputs = keras.layers.Concatenate(axis=-1, name='Concatenate2')([normalized_inputs, range_folded])
+
+    # Add coordinates
+    cin = keras.Input(c_shape, name='coordinates')
+    inputs['coordinates'] = cin
+
+    ### 🔀 GATED ROUTING STARTS HERE ###
+    # Step 1: Gating network
+    gate_feat,c = CoordConv2D(filters=start_filters * 2, kernel_size=3, padding="same",
+                        kernel_regularizer=keras.regularizers.l2(l2_reg),
+                        activation=None)([normalized_inputs, cin])
+    gate_pool = GlobalMaxPooling2D()(gate_feat)
+    gate_score = Dense(1, activation='sigmoid', name='gate_score')(gate_pool)  # Output in (0, 1)
+    gate_score = ExpandDimsTwice(name='expand_dims_twice')(gate_score)
+
+
+    # Step 2: Easy and Hard paths
+    easy_path, _ = wide_resnet_block(normalized_inputs, cin,
+                                     filters=start_filters,
+                                     widen_factor=2,
+                                     l2_reg=l2_reg,
+                                     nconvs=2,
+                                     drop_rate=dropout_rate)
+
+    hard_path, _ = wide_resnet_block(normalized_inputs, cin,
+                                     filters=start_filters,
+                                     widen_factor=2,
+                                     l2_reg=l2_reg,
+                                     nconvs=4,
+                                     drop_rate=dropout_rate)
+
+    # Step 3: Soft fusion of paths
+    x = gate_score * hard_path + (1.0 - gate_score) * easy_path
+    ### 🔀 GATED ROUTING ENDS HERE ###
+
+    x = se_block(x)
     x = Conv2D(128, 3, padding='same', use_bias=False)(x)  # <-- no bias
     x = BatchNormalization()(x)
     x = ReLU()(x)
-    attention_map = Conv2D(1, 1, activation='sigmoid', name='attention_map',use_bias=False)(x)  # shape (B, H, W, 1)
+    attention_map = Conv2D(1, 1, activation='sigmoid', name='attention_map')(x)  # shape (B, H, W, 1)
     attention_map = Dropout(rate=0.2, name='attention_dropout')(attention_map)
     x_weighted = Multiply()([x, attention_map])
 
     x_avg = GlobalAveragePooling2D()(x_weighted)
     x_max = GlobalMaxPooling2D()(x_weighted)
-    x_concat = keras.layers.Concatenate()([x_avg, x_max])
-
-
-    x_dense = Dense(64, activation='relu')(x_concat)
+    x_stack = StackAvgMax(name="stack_avg_max")([x_avg, x_max])
+    x_fused = Conv1D(64, 1, activation='relu')(x_stack)
+    x_fused = Flatten()(x_fused)
+    x_dense = Dense(64, activation='relu')(x_fused)
     output = Dense(1, activation='sigmoid', dtype='float32')(x_dense)
     return keras.Model(inputs=inputs,outputs=output)
+
+
 
 def se_block(x, ratio=16, name=None):
     filters = x.shape[-1]
@@ -219,7 +262,6 @@ DEFAULT_CONFIG={"epochs":100,
                     'learning_rate':1e-4,
                     'decay_steps':1386,
                     'decay_rate':0.958,
-                    "weight_decay": 2.63e-7,
                     'l2_reg':1e-5,
                     'wN':1.0,
                     'w0':1.0,
@@ -232,13 +274,23 @@ DEFAULT_CONFIG={"epochs":100,
                   "dataloader": "tensorflow-tfds", 
                   "dataloader_kwargs": {"select_keys": ["DBZ", "VEL", "KDP", "RHOHV", "ZDR", "WIDTH", "range_folded_mask", "coordinates"]}}
 
+
+@keras.utils.register_keras_serializable()
+class ExpandDimsTwice(keras.layers.Layer):
+    def call(self, inputs):
+        return tf.expand_dims(tf.expand_dims(inputs, axis=1), axis=1)
+@keras.utils.register_keras_serializable()
+class StackAvgMax(tf.keras.layers.Layer):
+    def call(self, inputs):
+        return tf.stack(inputs, axis=1)
+
 def main(config):
     # Gather all hyperparams
     epochs=config.get('epochs')
     batch_size=config.get('batch_size')
     start_filters=config.get('start_filters')
     dropout_rate=config.get('dropout_rate')
-    first_decay_steps=config.get('decay_steps')
+    first_decay_steps=config.get('first_decay_steps')
     lr=config.get('learning_rate')
     l2_reg=config.get('l2_reg')
     wN=config.get('wN')
@@ -276,70 +328,11 @@ def main(config):
     # Loss Function
     # Optimizer with Learning Rate Decay
     from_logits=False
-
-    def focal_loss(gamma=2.0, alpha=0.85):
-        def loss_fn(y_true, y_pred):
-            epsilon = tf.keras.backend.epsilon()
-            y_pred = tf.clip_by_value(y_pred, epsilon, 1. - epsilon)
-            pt = tf.where(tf.equal(y_true, 1), y_pred, 1 - y_pred)
-            return -tf.reduce_mean(alpha * tf.pow(1. - pt, gamma) * tf.math.log(pt))
-        return loss_fn
-    def tversky_loss(alpha=0.3, beta=0.7, smooth=1e-6):
-        """
-        Tversky Loss: adjusts trade-off between FP and FN.
-        alpha = weight for FP
-        beta = weight for FN
-        """
-        def loss_fn(y_true, y_pred):
-            y_true = tf.cast(y_true, tf.float32)
-            y_pred = tf.cast(y_pred, tf.float32)
-            tp = tf.reduce_sum(y_true * y_pred)
-            fp = tf.reduce_sum((1 - y_true) * y_pred)
-            fn = tf.reduce_sum(y_true * (1 - y_pred))
-            return 1 - (tp + smooth) / (tp + alpha * fp + beta * fn + smooth)
-        return loss_fn
-    def combo_loss(alpha=0.7):
-        return lambda y_true, y_pred: alpha * tversky_loss(alpha=0.5, beta=0.5)(y_true, y_pred) + \
-                                    (1 - alpha) * focal_loss(gamma=2.0, alpha=0.85)(y_true, y_pred)
-
     lr=keras.optimizers.schedules.ExponentialDecay(
                 config['learning_rate'], config['decay_steps'], config['decay_rate'], staircase=False, name="exp_decay")
     loss = keras.losses.BinaryCrossentropy( from_logits=from_logits, 
                                                     label_smoothing=0.1 )
     opt  = keras.optimizers.Adam(learning_rate=lr)
-    from_logits=False
-
-    def focal_loss(gamma=2.0, alpha=0.85):
-        def loss_fn(y_true, y_pred):
-            epsilon = tf.keras.backend.epsilon()
-            y_pred = tf.clip_by_value(y_pred, epsilon, 1. - epsilon)
-            pt = tf.where(tf.equal(y_true, 1), y_pred, 1 - y_pred)
-            return -tf.reduce_mean(alpha * tf.pow(1. - pt, gamma) * tf.math.log(pt))
-        return loss_fn
-    def tversky_loss(alpha=0.3, beta=0.7, smooth=1e-6):
-        """
-        Tversky Loss: adjusts trade-off between FP and FN.
-        alpha = weight for FP
-        beta = weight for FN
-        """
-        def loss_fn(y_true, y_pred):
-            y_true = tf.cast(y_true, tf.float32)
-            y_pred = tf.cast(y_pred, tf.float32)
-            tp = tf.reduce_sum(y_true * y_pred)
-            fp = tf.reduce_sum((1 - y_true) * y_pred)
-            fn = tf.reduce_sum(y_true * (1 - y_pred))
-            return 1 - (tp + smooth) / (tp + alpha * fp + beta * fn + smooth)
-        return loss_fn
-    def combo_loss(alpha=0.7):
-        return lambda y_true, y_pred: alpha * tversky_loss(alpha=0.5, beta=0.5)(y_true, y_pred) + \
-                                    (1 - alpha) * focal_loss(gamma=2.0, alpha=0.85)(y_true, y_pred)
-    lr=keras.optimizers.schedules.ExponentialDecay(
-                config['learning_rate'], config['decay_steps'], config['decay_rate'], staircase=False, name="exp_decay")
-    loss = keras.losses.BinaryCrossentropy( from_logits=from_logits, 
-                                                    label_smoothing=0.1 )
-    opt  = keras.optimizers.Adam(learning_rate=lr)
-
-
     # Metrics (Optimize AUCPR)
     metrics = [keras.metrics.AUC(from_logits=from_logits,curve='PR',name='AUCPR',num_thresholds=1000), 
                 tfm.BinaryAccuracy(from_logits,name='BinaryAccuracy'), 
@@ -351,7 +344,8 @@ def main(config):
                 tfm.Recall(from_logits,name='Recall'),
                 FalseAlarmRate(name='FalseAlarmRate'),
                 tfm.F1Score(from_logits=from_logits,name='F1'),
-                ThreatScore(name='ThreatScore')]
+                ThreatScore(name='ThreatScore'),
+                ]
     
     nn.compile(loss=loss, metrics=metrics, optimizer=opt,jit_compile=True)
     
@@ -374,7 +368,6 @@ def main(config):
         keras.callbacks.TerminateOnNaN(),
         keras.callbacks.EarlyStopping(monitor='val_AUCPR', patience=5, mode='max', restore_best_weights=True),
         keras.callbacks.EarlyStopping(monitor='val_F1', patience=5, mode='max', restore_best_weights=True),
-
     ]
     
     # TensorBoard Logging

@@ -1,0 +1,159 @@
+name: 'tornado_detector_baseline.keras'
+INFO:root:Threshold: 0.0101
+INFO:root:Model parameters: 4,665,409
+INFO:root:AUCPR: 0.5349
+INFO:root:BinaryAccuracy: 0.9456
+INFO:root:TruePositives: 915.0000
+INFO:root:FalsePositives: 635.0000
+INFO:root:TrueNegatives: 28841.0000
+INFO:root:FalseNegatives: 1076.0000
+INFO:root:Precision: 0.5903
+INFO:root:Recall: 0.4596
+INFO:root:FalseAlarmRate: 0.0215
+INFO:root:F1: 0.5168
+INFO:root:ThreatScore: 0.3484
+
+tornado_detector_v0:
+INFO:root:Threshold: 0.0000
+INFO:root:Model parameters: 96,481
+INFO:root:AUCPR: 0.0729
+INFO:root:BinaryAccuracy: 0.0633
+INFO:root:TruePositives: 1991.0000
+INFO:root:FalsePositives: 29476.0000
+INFO:root:TrueNegatives: 0.0000
+INFO:root:FalseNegatives: 0.0000
+INFO:root:Precision: 0.0633
+INFO:root:Recall: 1.0000
+INFO:root:FalseAlarmRate: 1.0000
+INFO:root:F1: 0.1190
+INFO:root:ThreatScore: 0.0633
+
+tornado_detector_v1:
+INFO:root:Threshold: 0.1515
+INFO:root:Model parameters: 336,193
+INFO:root:AUCPR: 0.4507
+INFO:root:BinaryAccuracy: 0.8818
+INFO:root:TruePositives: 1237.0000
+INFO:root:FalsePositives: 2966.0000
+INFO:root:TrueNegatives: 26510.0000
+INFO:root:FalseNegatives: 754.0000
+INFO:root:Precision: 0.2943
+INFO:root:Recall: 0.6213
+INFO:root:FalseAlarmRate: 0.1006
+INFO:root:F1: 0.3994
+INFO:root:ThreatScore: 0.2495
+
+tornado_detector_v2:
+INFO:root:val_AUCPR: 0.4172
+INFO:root:Threshold: 0.0909
+INFO:root:Model parameters: 4,814,617
+INFO:root:AUCPR: 0.3779
+INFO:root:BinaryAccuracy: 0.9435
+INFO:root:TruePositives: 898.0000
+INFO:root:FalsePositives: 685.0000
+INFO:root:TrueNegatives: 28791.0000
+INFO:root:FalseNegatives: 1093.0000
+INFO:root:Precision: 0.5673
+INFO:root:Recall: 0.4510
+INFO:root:FalseAlarmRate: 0.0232
+INFO:root:F1: 0.5025
+INFO:root:ThreatScore: 0.3356
+
+
+'name':'tornadoDetector_v3.keras'
+INFO:root:Threshold: 0.4343
+INFO:root:Model parameters: 4,945,562
+INFO:root:AUCPR: 0.4131
+INFO:root:BinaryAccuracy: 0.9251
+INFO:root:TruePositives: 891.0000
+INFO:root:FalsePositives: 1258.0000
+INFO:root:TrueNegatives: 28218.0000
+INFO:root:FalseNegatives: 1100.0000
+INFO:root:Precision: 0.4146
+INFO:root:Recall: 0.4475
+INFO:root:FalseAlarmRate: 0.0427
+INFO:root:F1: 0.4304
+INFO:root:ThreatScore: 0.2742
+
+'name':'tornado_detector_v4.keras'
+INFO:root:Threshold: 0.3333
+INFO:root:Model parameters: 4,945,562
+INFO:root:AUCPR: 0.4912
+INFO:root:BinaryAccuracy: 0.9334
+INFO:root:TruePositives: 987.0000
+INFO:root:FalsePositives: 1091.0000
+INFO:root:TrueNegatives: 28385.0000
+INFO:root:FalseNegatives: 1004.0000
+INFO:root:Precision: 0.4750
+INFO:root:Recall: 0.4957
+INFO:root:FalseAlarmRate: 0.0370
+INFO:root:F1: 0.4851
+INFO:root:ThreatScore: 0.3202
+val AUCPR: 5611
+
+
+Name:'tornado_detector_v4tuned'
+INFO:root:Threshold: 0.1818
+INFO:root:Model parameters: 4,945,433
+INFO:root:AUCPR: 0.5075
+INFO:root:BinaryAccuracy: 0.9355
+INFO:root:TruePositives: 1020.0000
+INFO:root:FalsePositives: 1058.0000
+INFO:root:TrueNegatives: 28418.0000
+INFO:root:FalseNegatives: 971.0000
+INFO:root:Precision: 0.4909
+INFO:root:Recall: 0.5123
+INFO:root:FalseAlarmRate: 0.0359
+INFO:root:F1: 0.5014
+INFO:root:ThreatScore: 0.3345
+val_auc_pr: 5624
+
+
+name: tornado_detector_v5.keras
+val AUCPR: 0.5926
+INFO:root:Threshold: 0.4444
+INFO:root:Model parameters: 229,759
+INFO:root:AUCPR: 0.5498
+INFO:root:BinaryAccuracy: 0.9456
+INFO:root:TruePositives: 973.0000
+INFO:root:FalsePositives: 693.0000
+INFO:root:TrueNegatives: 28783.0000
+INFO:root:FalseNegatives: 1018.0000
+INFO:root:Precision: 0.5840
+INFO:root:Recall: 0.4887
+INFO:root:FalseAlarmRate: 0.0235
+INFO:root:F1: 0.5321
+INFO:root:ThreatScore: 0.3625
+
+
+name: tornado_detector_v6.keras
+val AUCPR: 0.6031
+INFO:root:Threshold: 0.5353
+INFO:root:Model parameters: 514,905
+INFO:root:AUCPR: 0.5574
+INFO:root:BinaryAccuracy: 0.9436
+INFO:root:TruePositives: 976.0000
+INFO:root:FalsePositives: 761.0000
+INFO:root:TrueNegatives: 28715.0000
+INFO:root:FalseNegatives: 1015.0000
+INFO:root:Precision: 0.5619
+INFO:root:Recall: 0.4902
+INFO:root:FalseAlarmRate: 0.0258
+INFO:root:F1: 0.5236
+INFO:root:ThreatScore: 0.3547
+
+Ensemble Test v5+v6:
+val AUCPR: 0.6685
+INFO:root:Threshold: 0.4898
+INFO:root:Model parameters: 744,664
+INFO:root:AUCPR: 0.5705
+INFO:root:BinaryAccuracy: 0.9474
+INFO:root:TruePositives: 975.0000
+INFO:root:FalsePositives: 640.0000
+INFO:root:TrueNegatives: 28836.0000
+INFO:root:FalseNegatives: 1016.0000
+INFO:root:Precision: 0.6037
+INFO:root:Recall: 0.4897
+INFO:root:FalseAlarmRate: 0.0217
+INFO:root:F1: 0.5408
+INFO:root:ThreatScore: 0.3706

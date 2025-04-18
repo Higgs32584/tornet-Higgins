@@ -44,6 +44,8 @@ class CoordConv2D(keras.layers.Layer):
         self.padding = padding
         self.strides = strides
         self.conv2d_kwargs = conv2d_kwargs
+        if isinstance(strides, int):
+            strides = (strides, strides)
         self.strd = strides[0]  # assume equal strides
 
         self.conv = keras.layers.Conv2D(

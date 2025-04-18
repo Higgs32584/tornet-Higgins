@@ -1,0 +1,37 @@
+        "params": {
+            "dropout_rate": 0.1425377356312771,
+            "learning_rate": 0.0003675245867330951,
+            "l2_reg": 4.333606170845541e-06,
+            "decay_rate": 0.9519456389077654,
+            "decay_steps": 1443,
+            "wN": 0.8457284757343855,
+            "w0": 0.9684763382635093,
+            "w1": 1.1322328979114746,
+            "w2": 1.5981751652015048,
+            "wW": 1.3212161882899376,
+            "label_smoothing": 0.06459447957118834
+        },
+        "value": 0.5098022222518921
+    }
+DEFAULT_CONFIG = {
+    "start_filters": 96,
+    "learning_rate": 1e-4,
+    "decay_steps": 1386,
+    "decay_rate": 0.958,
+    "l2_reg": 2e-5,
+    "wN": 1.0,
+    "w0": 1.0,
+    "w1": 1.0,
+    "w2": 3.0,
+    "wW": 0.8,
+    "nconvs": 2,
+    "dropout_rate": 0.15,
+    "loss": "combo",  # << Changed from "cce"
+    "head": "maxpool",
+    "exp_name": "tornado_v7_boosted",
+    "exp_dir": ".",
+    "dataloader": "tensorflow-tfds",
+    "dataloader_kwargs": {
+        "select_keys": ["DBZ", "VEL", "KDP", "RHOHV", "ZDR", "WIDTH", "range_folded_mask", "coordinates"]
+    }
+}

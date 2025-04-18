@@ -36,6 +36,8 @@ import random
 
 logging.basicConfig(level=logging.ERROR)
 SEED = 42  
+tf.config.optimizer.set_jit(True)
+
 # Set random seeds for reproducibility
 os.environ['PYTHONHASHSEED'] = str(SEED)
 random.seed(SEED)
@@ -70,7 +72,6 @@ def build_model(model='wide_resnet',shape:Tuple[int]=(120,240,2),
                 c_shape:Tuple[int]=(120,240,2),
                 input_variables:List[str]=ALL_VARIABLES,
                 start_filters:int=64,
-                nconvs:int=2,
                 l2_reg:float=0.001,
                 background_flag:float=-3.0,
                 include_range_folded:bool=True,dropout_rate=0.1):
@@ -102,9 +103,9 @@ def build_model(model='wide_resnet',shape:Tuple[int]=(120,240,2),
     x,c = normalized_inputs,cin
     
     if model == 'wide_resnet':
-        x, c = wide_resnet_block(x, c, filters=start_filters, widen_factor=2, l2_reg=l2_reg,nconvs=nconvs, drop_rate=dropout_rate)
-        #x, c = wide_resnet_block(x, c, filters=start_filters*2, widen_factor=2, l2_reg=l2_reg,nconvs=nconvs, drop_rate=dropout_rate)
-        #x, c = wide_resnet_block(x, c, filters=start_filters*4, widen_factor=2, l2_reg=l2_reg,nconvs=nconvs, drop_rate=dropout_rate)
+        x, c = wide_resnet_block(x, c, filters=start_filters, widen_factor=2, l2_reg=l2_reg,nconvs=3, drop_rate=dropout_rate)
+        x, c = wide_resnet_block(x, c, filters=start_filters*2, widen_factor=2, l2_reg=l2_reg,nconvs=3, drop_rate=dropout_rate)
+        x, c = wide_resnet_block(x, c, filters=start_filters*4, widen_factor=2, l2_reg=l2_reg,nconvs=3, drop_rate=dropout_rate)
         x=se_block(x)
     x = Conv2D(128, 3, padding='same', use_bias=False)(x)  # <-- no bias
     x = BatchNormalization()(x)
@@ -140,17 +141,16 @@ def se_block(x, ratio=16, name=None):
     return x
 
 
-def wide_resnet_block(x, c, filters=64, widen_factor=2, l2_reg=1e-6, drop_rate=0.1,nconvs=2):
+def wide_resnet_block(x, c, filters=64, widen_factor=2, l2_reg=1e-6, drop_rate=0.0,nconvs=2):
     """Wide ResNet Block with CoordConv2D"""
     shortcut_x, shortcut_c = x, c  # Skip connection
 
     # 3x3 CoordConv2D (Wider filters)
     for i in range(nconvs):
-        x = BatchNormalization()(x)
-        x= ReLU()(x)
         x, c = CoordConv2D(filters=filters * widen_factor, kernel_size=3, padding="same",
                         kernel_regularizer=keras.regularizers.l2(l2_reg),
                         activation=None)([x, c])
+        x = BatchNormalization()(x)
     # Skip Connection
     shortcut_x, shortcut_c = CoordConv2D(filters=filters * widen_factor, kernel_size=1, padding="same",
                                          kernel_regularizer=keras.regularizers.l2(l2_reg),
@@ -169,9 +169,6 @@ def wide_resnet_block(x, c, filters=64, widen_factor=2, l2_reg=1e-6, drop_rate=0
         x = Dropout(rate=drop_rate)(x)
     
     return x, c
-
-
-
 @keras.utils.register_keras_serializable()
 class FastNormalize(keras.layers.Layer):
     def __init__(self, mean, std, **kwargs):
@@ -219,7 +216,6 @@ DEFAULT_CONFIG={"epochs":100,
                     'learning_rate':1e-4,
                     'decay_steps':1386,
                     'decay_rate':0.958,
-                    "weight_decay": 2.63e-7,
                     'l2_reg':1e-5,
                     'wN':1.0,
                     'w0':1.0,
@@ -228,6 +224,7 @@ DEFAULT_CONFIG={"epochs":100,
                     'wW':0.5,
                     'nconvs':2,
                     "dropout_rate":0.1,
+                    "label_smoothing":0.1,
                 "loss": "cce", "head": "maxpool", "exp_name": "tornado_baseline", "exp_dir": ".",
                   "dataloader": "tensorflow-tfds", 
                   "dataloader_kwargs": {"select_keys": ["DBZ", "VEL", "KDP", "RHOHV", "ZDR", "WIDTH", "range_folded_mask", "coordinates"]}}
@@ -238,7 +235,7 @@ def main(config):
     batch_size=config.get('batch_size')
     start_filters=config.get('start_filters')
     dropout_rate=config.get('dropout_rate')
-    first_decay_steps=config.get('decay_steps')
+    first_decay_steps=config.get('first_decay_steps')
     lr=config.get('learning_rate')
     l2_reg=config.get('l2_reg')
     wN=config.get('wN')
@@ -277,68 +274,9 @@ def main(config):
     # Optimizer with Learning Rate Decay
     from_logits=False
 
-    def focal_loss(gamma=2.0, alpha=0.85):
-        def loss_fn(y_true, y_pred):
-            epsilon = tf.keras.backend.epsilon()
-            y_pred = tf.clip_by_value(y_pred, epsilon, 1. - epsilon)
-            pt = tf.where(tf.equal(y_true, 1), y_pred, 1 - y_pred)
-            return -tf.reduce_mean(alpha * tf.pow(1. - pt, gamma) * tf.math.log(pt))
-        return loss_fn
-    def tversky_loss(alpha=0.3, beta=0.7, smooth=1e-6):
-        """
-        Tversky Loss: adjusts trade-off between FP and FN.
-        alpha = weight for FP
-        beta = weight for FN
-        """
-        def loss_fn(y_true, y_pred):
-            y_true = tf.cast(y_true, tf.float32)
-            y_pred = tf.cast(y_pred, tf.float32)
-            tp = tf.reduce_sum(y_true * y_pred)
-            fp = tf.reduce_sum((1 - y_true) * y_pred)
-            fn = tf.reduce_sum(y_true * (1 - y_pred))
-            return 1 - (tp + smooth) / (tp + alpha * fp + beta * fn + smooth)
-        return loss_fn
-    def combo_loss(alpha=0.7):
-        return lambda y_true, y_pred: alpha * tversky_loss(alpha=0.5, beta=0.5)(y_true, y_pred) + \
-                                    (1 - alpha) * focal_loss(gamma=2.0, alpha=0.85)(y_true, y_pred)
-
-    lr=keras.optimizers.schedules.ExponentialDecay(
-                config['learning_rate'], config['decay_steps'], config['decay_rate'], staircase=False, name="exp_decay")
-    loss = keras.losses.BinaryCrossentropy( from_logits=from_logits, 
-                                                    label_smoothing=0.1 )
-    opt  = keras.optimizers.Adam(learning_rate=lr)
-    from_logits=False
-
-    def focal_loss(gamma=2.0, alpha=0.85):
-        def loss_fn(y_true, y_pred):
-            epsilon = tf.keras.backend.epsilon()
-            y_pred = tf.clip_by_value(y_pred, epsilon, 1. - epsilon)
-            pt = tf.where(tf.equal(y_true, 1), y_pred, 1 - y_pred)
-            return -tf.reduce_mean(alpha * tf.pow(1. - pt, gamma) * tf.math.log(pt))
-        return loss_fn
-    def tversky_loss(alpha=0.3, beta=0.7, smooth=1e-6):
-        """
-        Tversky Loss: adjusts trade-off between FP and FN.
-        alpha = weight for FP
-        beta = weight for FN
-        """
-        def loss_fn(y_true, y_pred):
-            y_true = tf.cast(y_true, tf.float32)
-            y_pred = tf.cast(y_pred, tf.float32)
-            tp = tf.reduce_sum(y_true * y_pred)
-            fp = tf.reduce_sum((1 - y_true) * y_pred)
-            fn = tf.reduce_sum(y_true * (1 - y_pred))
-            return 1 - (tp + smooth) / (tp + alpha * fp + beta * fn + smooth)
-        return loss_fn
-    def combo_loss(alpha=0.7):
-        return lambda y_true, y_pred: alpha * tversky_loss(alpha=0.5, beta=0.5)(y_true, y_pred) + \
-                                    (1 - alpha) * focal_loss(gamma=2.0, alpha=0.85)(y_true, y_pred)
-    lr=keras.optimizers.schedules.ExponentialDecay(
-                config['learning_rate'], config['decay_steps'], config['decay_rate'], staircase=False, name="exp_decay")
-    loss = keras.losses.BinaryCrossentropy( from_logits=from_logits, 
-                                                    label_smoothing=0.1 )
-    opt  = keras.optimizers.Adam(learning_rate=lr)
-
+    lr_schedule = keras.optimizers.schedules.ExponentialDecay(config['learning_rate'], config['decay_steps'], config['decay_rate'])
+    opt = keras.optimizers.Adam(learning_rate=lr_schedule)
+    loss = keras.losses.BinaryCrossentropy(from_logits=False, label_smoothing=config["label_smoothing"])
 
     # Metrics (Optimize AUCPR)
     metrics = [keras.metrics.AUC(from_logits=from_logits,curve='PR',name='AUCPR',num_thresholds=1000), 

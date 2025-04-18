@@ -65,63 +65,6 @@ class FillNaNs(keras.layers.Layer):
     def get_config(self):
         return {**super().get_config(), "fill_val": self.fill_val.numpy().item()}
 
-
-def build_model(model='wide_resnet',shape:Tuple[int]=(120,240,2),
-                c_shape:Tuple[int]=(120,240,2),
-                input_variables:List[str]=ALL_VARIABLES,
-                start_filters:int=64,
-                nconvs:int=2,
-                l2_reg:float=0.001,
-                background_flag:float=-3.0,
-                include_range_folded:bool=True,dropout_rate=0.1):
-    # Create input layers for each input_variables
-    inputs = {}
-    for v in input_variables:
-        inputs[v]=keras.Input(shape,name=v)
-    n_sweeps=shape[2]
-    
-    # Normalize inputs and concate along channel dim
-    normalized_inputs=keras.layers.Concatenate(axis=-1,name='Concatenate1')(
-        [normalize(inputs[v],v) for v in input_variables]
-        )
-
-    # Replace nan pixel with background flag
-    normalized_inputs = FillNaNs(background_flag)(normalized_inputs)
-
-    # Add channel for range folded gates
-    if include_range_folded:
-        range_folded = keras.Input(shape[:2]+(n_sweeps,),name='range_folded_mask')
-        inputs['range_folded_mask']=range_folded
-        normalized_inputs = keras.layers.Concatenate(axis=-1,name='Concatenate2')(
-               [normalized_inputs,range_folded])
-        
-    # Input coordinate information
-    cin=keras.Input(c_shape,name='coordinates')
-    inputs['coordinates']=cin
-    
-    x,c = normalized_inputs,cin
-    
-    if model == 'wide_resnet':
-        x, c = wide_resnet_block(x, c, filters=start_filters, widen_factor=2, l2_reg=l2_reg,nconvs=nconvs, drop_rate=dropout_rate)
-        #x, c = wide_resnet_block(x, c, filters=start_filters*2, widen_factor=2, l2_reg=l2_reg,nconvs=nconvs, drop_rate=dropout_rate)
-        #x, c = wide_resnet_block(x, c, filters=start_filters*4, widen_factor=2, l2_reg=l2_reg,nconvs=nconvs, drop_rate=dropout_rate)
-        x=se_block(x)
-    x = Conv2D(128, 3, padding='same', use_bias=False)(x)  # <-- no bias
-    x = BatchNormalization()(x)
-    x = ReLU()(x)
-    attention_map = Conv2D(1, 1, activation='sigmoid', name='attention_map',use_bias=False)(x)  # shape (B, H, W, 1)
-    attention_map = Dropout(rate=0.2, name='attention_dropout')(attention_map)
-    x_weighted = Multiply()([x, attention_map])
-
-    x_avg = GlobalAveragePooling2D()(x_weighted)
-    x_max = GlobalMaxPooling2D()(x_weighted)
-    x_concat = keras.layers.Concatenate()([x_avg, x_max])
-
-
-    x_dense = Dense(64, activation='relu')(x_concat)
-    output = Dense(1, activation='sigmoid', dtype='float32')(x_dense)
-    return keras.Model(inputs=inputs,outputs=output)
-
 def se_block(x, ratio=16, name=None):
     filters = x.shape[-1]
     
@@ -139,36 +82,106 @@ def se_block(x, ratio=16, name=None):
     x = Multiply(name=f"{name}_scale" if name else None)([x, se])
     return x
 
+from tensorflow.keras import backend as K
 
-def wide_resnet_block(x, c, filters=64, widen_factor=2, l2_reg=1e-6, drop_rate=0.1,nconvs=2):
-    """Wide ResNet Block with CoordConv2D"""
-    shortcut_x, shortcut_c = x, c  # Skip connection
+import tensorflow as tf
+from keras import backend as K
+from keras.layers import (BatchNormalization, ReLU, Dropout, Add, GlobalAveragePooling2D,
+                          GlobalMaxPooling2D, Dense, Conv2D, Multiply)
+import keras
 
-    # 3x3 CoordConv2D (Wider filters)
-    for i in range(nconvs):
-        x = BatchNormalization()(x)
-        x= ReLU()(x)
-        x, c = CoordConv2D(filters=filters * widen_factor, kernel_size=3, padding="same",
-                        kernel_regularizer=keras.regularizers.l2(l2_reg),
-                        activation=None)([x, c])
-    # Skip Connection
-    shortcut_x, shortcut_c = CoordConv2D(filters=filters * widen_factor, kernel_size=1, padding="same",
-                                         kernel_regularizer=keras.regularizers.l2(l2_reg),
-                                         activation=None)([shortcut_x, shortcut_c])
-    
+def wide_resnet_unit(x, c, filters, stride=1, l2_reg=1e-4, dropout_rate=0.0):
+    shortcut = x
+    orig_c = c
 
-    # Add Residual Connection
+
+
+    # First BN + ReLU
+    x = BatchNormalization()(x)
     x = ReLU()(x)
-    x = Add()([x, shortcut_x])
 
-    # Pooling and dropout
-    x = MaxPool2D(pool_size=2, strides=2, padding='same')(x)
-    c = MaxPool2D(pool_size=2, strides=2, padding='same')(c)
+    # First CoordConv
+    x, c = CoordConv2D(filters, kernel_size=3, strides=stride, padding='same',
+                       kernel_regularizer=keras.regularizers.l2(l2_reg),
+                       activation=None)([x, c])
 
-    if drop_rate > 0:
-        x = Dropout(rate=drop_rate)(x)
-    
+
+    if dropout_rate > 0:
+        x = Dropout(dropout_rate)(x)
+
+    # Second BN + ReLU + CoordConv
+    x = BatchNormalization()(x)
+    x = ReLU()(x)
+    x, c = CoordConv2D(filters, kernel_size=3, strides=1, padding='same',
+                       kernel_regularizer=keras.regularizers.l2(l2_reg),
+                       activation=None)([x, c])
+
+
+
+    # # Adjust shortcut if needed
+    shortcut, _ = CoordConv2D(filters, kernel_size=1, strides=stride, padding='same',
+                                  kernel_regularizer=keras.regularizers.l2(l2_reg),
+                                  activation=None)([shortcut, orig_c])
+
+    x = Add()([x, shortcut])
     return x, c
+
+
+
+def wide_resnet_stage(x, c, filters, num_blocks, stride, l2_reg, dropout_rate):
+    x, c = wide_resnet_unit(x, c, filters, stride=stride, l2_reg=l2_reg, dropout_rate=dropout_rate)
+    for i in range(1, num_blocks):
+        x, c = wide_resnet_unit(x, c, filters, stride=1, l2_reg=l2_reg, dropout_rate=dropout_rate)
+    return x, c
+
+
+def build_model(model='wide_resnet', shape=(120, 240, 2), c_shape=(120, 240, 2),
+                input_variables=ALL_VARIABLES, start_filters=16, dropout_rate=0.1,
+                widen_factor=10, depth=28, l2_reg=1e-4, background_flag=-3.0,
+                include_range_folded=True):
+
+    inputs = {}
+    for v in input_variables:
+        inputs[v] = keras.Input(shape, name=v)
+
+    normalized_inputs = keras.layers.Concatenate(axis=-1)([normalize(inputs[v], v) for v in input_variables])
+    normalized_inputs = FillNaNs(background_flag)(normalized_inputs)
+
+    n_sweeps = shape[2]
+    if include_range_folded:
+        range_folded = keras.Input(shape[:2] + (n_sweeps,), name='range_folded_mask')
+        inputs['range_folded_mask'] = range_folded
+        normalized_inputs = keras.layers.Concatenate(axis=-1)([normalized_inputs, range_folded])
+
+    coordinates = keras.Input(c_shape, name='coordinates')
+    inputs['coordinates'] = coordinates
+
+    x, c = normalized_inputs, coordinates
+    n = (depth - 4) // 6
+    filters = [start_filters * widen_factor, start_filters * 2 * widen_factor, start_filters * 4 * widen_factor]
+
+
+    # Initial CoordConv
+    x, c = CoordConv2D(filters=filters[0], kernel_size=3, padding='same',
+                       kernel_regularizer=keras.regularizers.l2(l2_reg), activation=None)([x, c])
+
+    # Stages
+    x, c = wide_resnet_stage(x, c, filters[0], num_blocks=n, stride=1, l2_reg=l2_reg, dropout_rate=dropout_rate)
+    x = se_block(x)
+    x, c = wide_resnet_stage(x, c, filters[1], num_blocks=n, stride=2, l2_reg=l2_reg, dropout_rate=dropout_rate)
+    x = se_block(x)
+    x, c = wide_resnet_stage(x, c, filters[2], num_blocks=n, stride=2, l2_reg=l2_reg, dropout_rate=dropout_rate)
+    x = se_block(x)  # Keep channel attention
+
+    # Global Average + Max pooling
+    x_avg = GlobalAveragePooling2D()(x)
+    x_max = GlobalMaxPooling2D()(x)
+    x = keras.layers.Concatenate()([x_avg, x_max])
+
+    x = Dense(64, activation='relu')(x)
+    output = Dense(1, activation='sigmoid', dtype='float32')(x)
+
+    return keras.Model(inputs=inputs, outputs=output)
 
 
 
@@ -215,11 +228,10 @@ DEFAULT_CONFIG={"epochs":100,
                 "train_years": [2013,2014,2015,2016,2017,2018,2019,2020], 
                 "val_years": [2021,2022], "batch_size": 128
                 , "model": "wide_resnet", 
-                    'start_filters':48,
+                    'start_filters':1,
                     'learning_rate':1e-4,
                     'decay_steps':1386,
                     'decay_rate':0.958,
-                    "weight_decay": 2.63e-7,
                     'l2_reg':1e-5,
                     'wN':1.0,
                     'w0':1.0,
@@ -238,7 +250,7 @@ def main(config):
     batch_size=config.get('batch_size')
     start_filters=config.get('start_filters')
     dropout_rate=config.get('dropout_rate')
-    first_decay_steps=config.get('decay_steps')
+    first_decay_steps=config.get('first_decay_steps')
     lr=config.get('learning_rate')
     l2_reg=config.get('l2_reg')
     wN=config.get('wN')
@@ -276,70 +288,11 @@ def main(config):
     # Loss Function
     # Optimizer with Learning Rate Decay
     from_logits=False
-
-    def focal_loss(gamma=2.0, alpha=0.85):
-        def loss_fn(y_true, y_pred):
-            epsilon = tf.keras.backend.epsilon()
-            y_pred = tf.clip_by_value(y_pred, epsilon, 1. - epsilon)
-            pt = tf.where(tf.equal(y_true, 1), y_pred, 1 - y_pred)
-            return -tf.reduce_mean(alpha * tf.pow(1. - pt, gamma) * tf.math.log(pt))
-        return loss_fn
-    def tversky_loss(alpha=0.3, beta=0.7, smooth=1e-6):
-        """
-        Tversky Loss: adjusts trade-off between FP and FN.
-        alpha = weight for FP
-        beta = weight for FN
-        """
-        def loss_fn(y_true, y_pred):
-            y_true = tf.cast(y_true, tf.float32)
-            y_pred = tf.cast(y_pred, tf.float32)
-            tp = tf.reduce_sum(y_true * y_pred)
-            fp = tf.reduce_sum((1 - y_true) * y_pred)
-            fn = tf.reduce_sum(y_true * (1 - y_pred))
-            return 1 - (tp + smooth) / (tp + alpha * fp + beta * fn + smooth)
-        return loss_fn
-    def combo_loss(alpha=0.7):
-        return lambda y_true, y_pred: alpha * tversky_loss(alpha=0.5, beta=0.5)(y_true, y_pred) + \
-                                    (1 - alpha) * focal_loss(gamma=2.0, alpha=0.85)(y_true, y_pred)
-
     lr=keras.optimizers.schedules.ExponentialDecay(
                 config['learning_rate'], config['decay_steps'], config['decay_rate'], staircase=False, name="exp_decay")
     loss = keras.losses.BinaryCrossentropy( from_logits=from_logits, 
                                                     label_smoothing=0.1 )
     opt  = keras.optimizers.Adam(learning_rate=lr)
-    from_logits=False
-
-    def focal_loss(gamma=2.0, alpha=0.85):
-        def loss_fn(y_true, y_pred):
-            epsilon = tf.keras.backend.epsilon()
-            y_pred = tf.clip_by_value(y_pred, epsilon, 1. - epsilon)
-            pt = tf.where(tf.equal(y_true, 1), y_pred, 1 - y_pred)
-            return -tf.reduce_mean(alpha * tf.pow(1. - pt, gamma) * tf.math.log(pt))
-        return loss_fn
-    def tversky_loss(alpha=0.3, beta=0.7, smooth=1e-6):
-        """
-        Tversky Loss: adjusts trade-off between FP and FN.
-        alpha = weight for FP
-        beta = weight for FN
-        """
-        def loss_fn(y_true, y_pred):
-            y_true = tf.cast(y_true, tf.float32)
-            y_pred = tf.cast(y_pred, tf.float32)
-            tp = tf.reduce_sum(y_true * y_pred)
-            fp = tf.reduce_sum((1 - y_true) * y_pred)
-            fn = tf.reduce_sum(y_true * (1 - y_pred))
-            return 1 - (tp + smooth) / (tp + alpha * fp + beta * fn + smooth)
-        return loss_fn
-    def combo_loss(alpha=0.7):
-        return lambda y_true, y_pred: alpha * tversky_loss(alpha=0.5, beta=0.5)(y_true, y_pred) + \
-                                    (1 - alpha) * focal_loss(gamma=2.0, alpha=0.85)(y_true, y_pred)
-    lr=keras.optimizers.schedules.ExponentialDecay(
-                config['learning_rate'], config['decay_steps'], config['decay_rate'], staircase=False, name="exp_decay")
-    loss = keras.losses.BinaryCrossentropy( from_logits=from_logits, 
-                                                    label_smoothing=0.1 )
-    opt  = keras.optimizers.Adam(learning_rate=lr)
-
-
     # Metrics (Optimize AUCPR)
     metrics = [keras.metrics.AUC(from_logits=from_logits,curve='PR',name='AUCPR',num_thresholds=1000), 
                 tfm.BinaryAccuracy(from_logits,name='BinaryAccuracy'), 

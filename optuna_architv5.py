@@ -17,8 +17,24 @@ from tensorflow.keras.layers import (
     Conv2D,
     GlobalMaxPooling2D,
     Reshape,
-    ReLU
+    ReLU,
 )
+import optuna
+from tornet.metrics.keras import metrics as tfm
+from tornet.models.keras.layers import CoordConv2D
+from optuna.integration import TFKerasPruningCallback
+from datetime import datetime
+timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+STUDY_DIR = os.path.join("optuna_studies", f"study_{timestamp}")
+os.makedirs(STUDY_DIR, exist_ok=True)
+import sys
+import os
+import json
+import shutil
+import logging
+import numpy as np
+import tensorflow as tf
+from tensorflow import keras
 from tensorflow.keras.optimizers import AdamW
 from tensorflow.keras.optimizers.schedules import CosineDecayRestarts
 from typing import List, Tuple
@@ -26,14 +42,7 @@ from tornet.data.loader import get_dataloader
 from tornet.data import preprocess as pp
 from tornet.data.preprocess import get_shape
 from tornet.data.constants import ALL_VARIABLES, CHANNEL_MIN_MAX
-from tornet.metrics.keras import metrics as tfm
-from tornet.utils.general import make_exp_dir
-from custom_func import FalseAlarmRate, ThreatScore
-import tensorflow_datasets as tfds
-from tornet.models.keras.layers import CoordConv2D
-import tornet.data.tfds.tornet.tornet_dataset_builder
 import random
-
 logging.basicConfig(level=logging.ERROR)
 SEED = 42  
 # Set random seeds for reproducibility
@@ -73,7 +82,7 @@ def build_model(model='wide_resnet',shape:Tuple[int]=(120,240,2),
                 nconvs:int=2,
                 l2_reg:float=0.001,
                 background_flag:float=-3.0,
-                include_range_folded:bool=True,dropout_rate=0.1):
+                include_range_folded:bool=True,dropout_rate=0.1,**config):
     # Create input layers for each input_variables
     inputs = {}
     for v in input_variables:
@@ -102,15 +111,13 @@ def build_model(model='wide_resnet',shape:Tuple[int]=(120,240,2),
     x,c = normalized_inputs,cin
     
     if model == 'wide_resnet':
-        x, c = wide_resnet_block(x, c, filters=start_filters, widen_factor=2, l2_reg=l2_reg,nconvs=nconvs, drop_rate=dropout_rate)
-        #x, c = wide_resnet_block(x, c, filters=start_filters*2, widen_factor=2, l2_reg=l2_reg,nconvs=nconvs, drop_rate=dropout_rate)
-        #x, c = wide_resnet_block(x, c, filters=start_filters*4, widen_factor=2, l2_reg=l2_reg,nconvs=nconvs, drop_rate=dropout_rate)
+        x, c = wide_resnet_block(x, c, filters=start_filters, widen_factor=config['widen_factor'], l2_reg=l2_reg,nconvs=nconvs, drop_rate=dropout_rate)
         x=se_block(x)
     x = Conv2D(128, 3, padding='same', use_bias=False)(x)  # <-- no bias
     x = BatchNormalization()(x)
     x = ReLU()(x)
     attention_map = Conv2D(1, 1, activation='sigmoid', name='attention_map',use_bias=False)(x)  # shape (B, H, W, 1)
-    attention_map = Dropout(rate=0.2, name='attention_dropout')(attention_map)
+    attention_map = Dropout(rate=config['attn_dropout'], name='attention_dropout')(attention_map)
     x_weighted = Multiply()([x, attention_map])
 
     x_avg = GlobalAveragePooling2D()(x_weighted)
@@ -205,6 +212,8 @@ def normalize(x, name: str):
     return FastNormalize(mean, std)(x)
 # Enable GPU Memory Growth
 gpus = tf.config.experimental.list_physical_devices('GPU')
+tf.config.optimizer.set_jit(True)
+
 if gpus:
     for gpu in gpus:
         tf.config.experimental.set_memory_growth(gpu, True)
@@ -212,136 +221,77 @@ if gpus:
 
 DEFAULT_CONFIG={"epochs":100, 
                 "input_variables": ["DBZ", "VEL", "KDP", "ZDR","RHOHV","WIDTH"], 
-                "train_years": [2013,2014,2015,2016,2017,2018,2019,2020], 
+                "train_years": [2019,2020], 
                 "val_years": [2021,2022], "batch_size": 128
                 , "model": "wide_resnet", 
                     'start_filters':48,
                     'learning_rate':1e-4,
                     'decay_steps':1386,
                     'decay_rate':0.958,
-                    "weight_decay": 2.63e-7,
                     'l2_reg':1e-5,
+                    'weights':{
                     'wN':1.0,
                     'w0':1.0,
                     'w1':1.0,
                     'w2':2.0,
                     'wW':0.5,
+                    },
                     'nconvs':2,
                     "dropout_rate":0.1,
                 "loss": "cce", "head": "maxpool", "exp_name": "tornado_baseline", "exp_dir": ".",
                   "dataloader": "tensorflow-tfds", 
                   "dataloader_kwargs": {"select_keys": ["DBZ", "VEL", "KDP", "RHOHV", "ZDR", "WIDTH", "range_folded_mask", "coordinates"]}}
 
-def main(config):
-    # Gather all hyperparams
-    epochs=config.get('epochs')
-    batch_size=config.get('batch_size')
-    start_filters=config.get('start_filters')
-    dropout_rate=config.get('dropout_rate')
-    first_decay_steps=config.get('decay_steps')
-    lr=config.get('learning_rate')
-    l2_reg=config.get('l2_reg')
-    wN=config.get('wN')
-    w0=config.get('w0')
-    w1=config.get('w1')
-    w2=config.get('w2')
-    wW=config.get('wW')
-    input_variables=config.get('input_variables')
-    exp_name=config.get('exp_name')
-    model=config.get('model')
-    exp_dir=config.get('exp_dir')
-    train_years=config.get('train_years')
-    val_years=config.get('val_years')
-    dataloader=config.get('dataloader')
-    dataloader_kwargs = config.get('dataloader_kwargs')
-    
-    logging.info(f'Using {dataloader} dataloader')
-    logging.info(f'Running with config: {config}')
-    weights={'wN':wN,'w0':w0,'w1':w1,'w2':w2,'wW':wW}
+@keras.utils.register_keras_serializable()
+class ExpandDimsTwice(keras.layers.Layer):
+    def call(self, inputs):
+        return tf.expand_dims(tf.expand_dims(inputs, axis=1), axis=1)
+@keras.utils.register_keras_serializable()
+class StackAvgMax(tf.keras.layers.Layer):
+    def call(self, inputs):
+        return tf.stack(inputs, axis=1)
 
-    # Data Loaders
-    dataloader_kwargs.update({'select_keys': input_variables + ['range_folded_mask', 'coordinates']})
-    # Apply to Train and Validation Data
-    ds_train = get_dataloader(dataloader, DATA_ROOT, train_years, "train", batch_size, weights, **dataloader_kwargs)
-    ds_val = get_dataloader(dataloader, DATA_ROOT, val_years, "train", batch_size, {'wN':1.0,'w0':1.0,'w1':1.0,'w2':1.0,'wW':1.0}, **dataloader_kwargs)
+def objective(trial):
+    config = DEFAULT_CONFIG.copy()
+
+    config.update({
+        "dropout_rate": round(trial.suggest_float("dropout_rate", 0.05, 0.5), 5),
+        "learning_rate": round(trial.suggest_float("learning_rate", 1e-6, 1e-3, log=True), 5),
+        "l2_reg": round(trial.suggest_float("l2_reg", 1e-6, 1e-3, log=True), 5),
+        "decay_steps": trial.suggest_int("decay_steps", 970, 1800),
+        "label_smoothing": round(trial.suggest_float("label_smoothing", 0.05, 0.2), 5),
+        "nconvs": trial.suggest_categorical("nconvs",[1,2,3]),
+        "widen_factor": trial.suggest_categorical("widen_factor",[1,2,4]),
+        "start_filters": trial.suggest_categorical("start_filters",[48,96]),
+        "attn_dropout": round(trial.suggest_float("attn_dropout", 0.1, 0.3), 5),
+
+    })
+
+    ds_train = get_dataloader(config['dataloader'], DATA_ROOT, config['train_years'], "train",
+                                config['batch_size'], config['weights'], **config['dataloader_kwargs'])
+    ds_val = get_dataloader(config['dataloader'], DATA_ROOT, config['val_years'], "train",
+                            config['batch_size'], {'wN': 1.0, 'w0': 1.0, 'w1': 1.0, 'w2': 1.0, 'wW': 1.0},
+                            **config['dataloader_kwargs'])
 
     x, _, _ = next(iter(ds_train))
-    
-    in_shapes = (120, 240, get_shape(x)[-1])
-    c_shapes = (120, 240, x["coordinates"].shape[-1])
-    nn = build_model(model=model,shape=in_shapes, c_shape=c_shapes, start_filters=start_filters, 
-                         l2_reg=l2_reg, input_variables=input_variables,dropout_rate=dropout_rate)
-    print(nn.summary())
-    
-    # Loss Function
-    # Optimizer with Learning Rate Decay
-    from_logits=False
+    in_shapes = (None, None, get_shape(x)[-1])
+    c_shapes = (None, None, x["coordinates"].shape[-1])
+    model = build_model(
+        shape=in_shapes,
+        c_shape=c_shapes,
+        **config
+    )
 
-    def focal_loss(gamma=2.0, alpha=0.85):
-        def loss_fn(y_true, y_pred):
-            epsilon = tf.keras.backend.epsilon()
-            y_pred = tf.clip_by_value(y_pred, epsilon, 1. - epsilon)
-            pt = tf.where(tf.equal(y_true, 1), y_pred, 1 - y_pred)
-            return -tf.reduce_mean(alpha * tf.pow(1. - pt, gamma) * tf.math.log(pt))
-        return loss_fn
-    def tversky_loss(alpha=0.3, beta=0.7, smooth=1e-6):
-        """
-        Tversky Loss: adjusts trade-off between FP and FN.
-        alpha = weight for FP
-        beta = weight for FN
-        """
-        def loss_fn(y_true, y_pred):
-            y_true = tf.cast(y_true, tf.float32)
-            y_pred = tf.cast(y_pred, tf.float32)
-            tp = tf.reduce_sum(y_true * y_pred)
-            fp = tf.reduce_sum((1 - y_true) * y_pred)
-            fn = tf.reduce_sum(y_true * (1 - y_pred))
-            return 1 - (tp + smooth) / (tp + alpha * fp + beta * fn + smooth)
-        return loss_fn
-    def combo_loss(alpha=0.7):
-        return lambda y_true, y_pred: alpha * tversky_loss(alpha=0.5, beta=0.5)(y_true, y_pred) + \
-                                    (1 - alpha) * focal_loss(gamma=2.0, alpha=0.85)(y_true, y_pred)
+    lr_schedule = keras.optimizers.schedules.ExponentialDecay(config['learning_rate'], config['decay_steps'], config['decay_rate'])
+    opt = keras.optimizers.Adam(learning_rate=lr_schedule)
+    loss = keras.losses.BinaryCrossentropy(from_logits=False, label_smoothing=config["label_smoothing"])
 
-    lr=keras.optimizers.schedules.ExponentialDecay(
-                config['learning_rate'], config['decay_steps'], config['decay_rate'], staircase=False, name="exp_decay")
-    loss = keras.losses.BinaryCrossentropy( from_logits=from_logits, 
-                                                    label_smoothing=0.1 )
-    opt  = keras.optimizers.Adam(learning_rate=lr)
-    from_logits=False
-
-    def focal_loss(gamma=2.0, alpha=0.85):
-        def loss_fn(y_true, y_pred):
-            epsilon = tf.keras.backend.epsilon()
-            y_pred = tf.clip_by_value(y_pred, epsilon, 1. - epsilon)
-            pt = tf.where(tf.equal(y_true, 1), y_pred, 1 - y_pred)
-            return -tf.reduce_mean(alpha * tf.pow(1. - pt, gamma) * tf.math.log(pt))
-        return loss_fn
-    def tversky_loss(alpha=0.3, beta=0.7, smooth=1e-6):
-        """
-        Tversky Loss: adjusts trade-off between FP and FN.
-        alpha = weight for FP
-        beta = weight for FN
-        """
-        def loss_fn(y_true, y_pred):
-            y_true = tf.cast(y_true, tf.float32)
-            y_pred = tf.cast(y_pred, tf.float32)
-            tp = tf.reduce_sum(y_true * y_pred)
-            fp = tf.reduce_sum((1 - y_true) * y_pred)
-            fn = tf.reduce_sum(y_true * (1 - y_pred))
-            return 1 - (tp + smooth) / (tp + alpha * fp + beta * fn + smooth)
-        return loss_fn
-    def combo_loss(alpha=0.7):
-        return lambda y_true, y_pred: alpha * tversky_loss(alpha=0.5, beta=0.5)(y_true, y_pred) + \
-                                    (1 - alpha) * focal_loss(gamma=2.0, alpha=0.85)(y_true, y_pred)
-    lr=keras.optimizers.schedules.ExponentialDecay(
-                config['learning_rate'], config['decay_steps'], config['decay_rate'], staircase=False, name="exp_decay")
-    loss = keras.losses.BinaryCrossentropy( from_logits=from_logits, 
-                                                    label_smoothing=0.1 )
-    opt  = keras.optimizers.Adam(learning_rate=lr)
-
-
-    # Metrics (Optimize AUCPR)
-    metrics = [keras.metrics.AUC(from_logits=from_logits,curve='PR',name='AUCPR',num_thresholds=1000), 
+    try:
+        from_logits=False
+        model.compile(
+            loss=loss,
+            optimizer=opt,
+            metrics=[keras.metrics.AUC(from_logits=from_logits,curve='PR',name='AUCPR',num_thresholds=1000), 
                 tfm.BinaryAccuracy(from_logits,name='BinaryAccuracy'), 
                 tfm.TruePositives(from_logits,name='TruePositives'),
                 tfm.FalsePositives(from_logits,name='FalsePositives'), 
@@ -349,47 +299,60 @@ def main(config):
                 tfm.FalseNegatives(from_logits,name='FalseNegatives'), 
                 tfm.Precision(from_logits,name='Precision'), 
                 tfm.Recall(from_logits,name='Recall'),
-                FalseAlarmRate(name='FalseAlarmRate'),
                 tfm.F1Score(from_logits=from_logits,name='F1'),
-                ThreatScore(name='ThreatScore')]
-    
-    nn.compile(loss=loss, metrics=metrics, optimizer=opt,jit_compile=True)
-    
-    # Experiment Directory
-    expdir = make_exp_dir(exp_dir=exp_dir, prefix=exp_name)
-    with open(os.path.join(expdir,'data.json'),'w') as f:
-        json.dump(
-            {'data_root':DATA_ROOT,
-             'train_data':list(train_years), 
-             'val_data':list(val_years)},f)
-    with open(os.path.join(expdir,'params.json'),'w') as f:
-        json.dump({'config':config},f)
-    # Copy the training script
-    shutil.copy(__file__, os.path.join(expdir,'train.py')) 
-    # Callbacks (Now Monitors AUCPR)
-    checkpoint_name = os.path.join(expdir, 'tornadoDetector_{epoch:03d}.keras')
-    callbacks = [
-        keras.callbacks.ModelCheckpoint(checkpoint_name, monitor='val_AUCPR', save_best_only=False),
-        keras.callbacks.CSVLogger(os.path.join(expdir, 'history.csv')),
-        keras.callbacks.TerminateOnNaN(),
-        keras.callbacks.EarlyStopping(monitor='val_AUCPR', patience=5, mode='max', restore_best_weights=True),
-        keras.callbacks.EarlyStopping(monitor='val_F1', patience=5, mode='max', restore_best_weights=True),
+            ],
+            jit_compile=True
+        )
 
-    ]
-    
-    # TensorBoard Logging
-    if keras.config.backend() == "tensorflow":
-        callbacks.append(keras.callbacks.TensorBoard(log_dir=os.path.join(expdir, 'logs'), write_graph=False))
-    
-    # Train Model
-    history = nn.fit(ds_train, epochs=epochs, validation_data=ds_val, callbacks=callbacks, verbose=1)
-    
-    # Get Best Metrics
-    best_aucpr = max(history.history.get('val_AUCPR', [0]))
-    return {'AUCPR': best_aucpr}
+        early_stopping = keras.callbacks.EarlyStopping(monitor='val_AUCPR', patience=2, mode='max', restore_best_weights=True)
+        prune_cb = TFKerasPruningCallback(trial, 'val_AUCPR')
+        history = model.fit(ds_train, epochs=config['epochs'], validation_data=ds_val, verbose=1,callbacks=[early_stopping, prune_cb])
+        best_aucpr = max(history.history.get('val_AUCPR', [0]))
+        log_trial(trial, best_aucpr)
+        return best_aucpr
+    except tf.errors.ResourceExhaustedError as e:
+        # Handle OOM error: log it and return a "failed" result to Optuna (nan)
+        print(f"Out of memory error occurred in trial {trial.number}. Skipping this trial.")
+        log_trial(trial, float('nan'))  # Optionally log 'nan' to indicate failure
+        return float('nan')  # Return NaN to indicate the trial failed
+
+def log_trial(trial, trial_results):
+    trial_data = {
+        "trial_id": trial.number,
+        "params": trial.params,
+        "value": trial_results,
+    }
+
+    trial_log_path = os.path.join(STUDY_DIR, "all_trials.json")
+
+    # Load existing log or initialize empty list
+    if os.path.exists(trial_log_path):
+        with open(trial_log_path, "r") as f:
+            trial_log = json.load(f)
+    else:
+        trial_log = []
+
+    trial_log.append(trial_data)
+
+    # Write updated log
+    with open(trial_log_path, "w") as f:
+        json.dump(trial_log, f, indent=4)
 
 if __name__ == '__main__':
-    config = DEFAULT_CONFIG
-    if len(sys.argv) > 1:
-            config.update(json.load(open(sys.argv[1], 'r')))
-    main(config)
+    study = optuna.create_study(direction='maximize', sampler=optuna.samplers.TPESampler(multivariate=True,seed=SEED),
+                                 pruner=optuna.pruners.HyperbandPruner())
+    study.optimize(objective, n_trials=150)
+
+    best_trial_data = {
+        "best_trial_id": study.best_trial.number,
+        "best_params": study.best_trial.params,
+        "best_value": study.best_trial.value,
+        "DEFAULT_CONFIG": DEFAULT_CONFIG.copy()
+    }
+
+    best_params_path = os.path.join(STUDY_DIR, "best_params.json")
+    with open(best_params_path, "w") as f:
+        json.dump(best_trial_data, f, indent=4)
+
+    print(f"Best trial saved to: {best_params_path}")
+    print("Best trial:", study.best_trial)

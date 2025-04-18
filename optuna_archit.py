@@ -18,10 +18,13 @@ from tensorflow.keras.layers import (
     GlobalMaxPooling2D,
     Reshape,
     ReLU,
-    Lambda,
-    Conv1D,
-    Flatten,
 )
+import optuna
+from optuna.integration import TFKerasPruningCallback
+from datetime import datetime
+timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
+STUDY_DIR = os.path.join("optuna_studies", f"study_{timestamp}")
+os.makedirs(STUDY_DIR, exist_ok=True)
 from tensorflow.keras.optimizers import AdamW
 from tensorflow.keras.optimizers.schedules import CosineDecayRestarts
 from typing import List, Tuple
@@ -36,7 +39,7 @@ import tensorflow_datasets as tfds
 from tornet.models.keras.layers import CoordConv2D
 import tornet.data.tfds.tornet.tornet_dataset_builder
 import random
-from datetime import datetime
+
 logging.basicConfig(level=logging.ERROR)
 SEED = 42  
 # Set random seeds for reproducibility
@@ -44,36 +47,15 @@ os.environ['PYTHONHASHSEED'] = str(SEED)
 random.seed(SEED)
 np.random.seed(SEED)
 tf.random.set_seed(SEED)
-timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-STUDY_DIR = os.path.join("optuna_studies", f"study_{timestamp}")
-os.makedirs(STUDY_DIR, exist_ok=True)
 # Environment Variables
 DATA_ROOT = '/home/ubuntu/tfds'
 TORNET_ROOT=DATA_ROOT
 TFDS_DATA_DIR = DATA_ROOT
-from optuna.integration import TFKerasPruningCallback
-
 EXP_DIR = "."
 os.environ['TORNET_ROOT'] = DATA_ROOT
 os.environ['TFDS_DATA_DIR'] = TFDS_DATA_DIR
 os.environ["TF_XLA_FLAGS"] = "--tf_xla_auto_jit=2"
-class GateScoreMonitor(tf.keras.callbacks.Callback):
-    def __init__(self, model, gate_layer_name='gate_score', val_data=None):
-        super().__init__()
-        self.gate_layer = model.get_layer(gate_layer_name)
-        self.gate_output_fn = tf.keras.backend.function(model.inputs, [self.gate_layer.output])
-        self.val_data = val_data
-
-    def on_epoch_end(self, epoch, logs=None):
-        # Grab a small validation batch
-        for x_val, *_ in self.val_data.take(1):
-            gate_scores = self.gate_output_fn(x_val)[0]
-            flat = tf.reshape(gate_scores, [-1])
-            mean = tf.reduce_mean(flat).numpy()
-            std = tf.math.reduce_std(flat).numpy()
-            print(f"\n[GateScoreMonitor] Epoch {epoch}: Mean={mean:.4f}, Std={std:.4f}")
-            break
-import optuna
+tf.config.optimizer.set_jit(True)
 
 
 logging.info(f'TORNET_ROOT={DATA_ROOT}')
@@ -91,83 +73,82 @@ class FillNaNs(keras.layers.Layer):
         return {**super().get_config(), "fill_val": self.fill_val.numpy().item()}
 
 
-def build_model(shape: Tuple[int], c_shape: Tuple[int], **kwargs):
-    input_variables = kwargs.get("input_variables", ALL_VARIABLES)
-    start_filters = kwargs.get("start_filters", 64)
-    nconvs = kwargs.get("nconvs", 2)
-    widen_factor = kwargs.get("widen_factor", 2)
-    l2_reg = kwargs.get("l2_reg", 1e-4)
-    dropout_rate = kwargs.get("dropout_rate", 0.1)
-    attention_dropout_rate = kwargs.get("attention_dropout_rate", 0.2)
-    include_range_folded = kwargs.get("include_range_folded", True)
-    background_flag = kwargs.get("background_flag", -3.0)
-    # Create input layers for each input_variables
-    inputs = {}
-    for v in input_variables:
-        inputs[v] = keras.Input(shape, name=v)
+def build_model(model='v7', shape: Tuple[int] = (120, 240, 2),
+                c_shape: Tuple[int] = (120, 240, 2),
+                input_variables: List[str] = ALL_VARIABLES,
+                start_filters: int = 96,  # Bumped up from 64 for added capacity
+                nconvs: int = 2,
+                l2_reg: float = 0.001,
+                background_flag: float = -3.0,
+                include_range_folded: bool = True,
+                dropout_rate: float = 0.1, **config):
+    
+    inputs = {v: keras.Input(shape, name=v) for v in input_variables}
     n_sweeps = shape[2]
 
     # Normalize and concatenate
-    normalized_inputs = keras.layers.Concatenate(axis=-1, name='Concatenate1')(
+    x = keras.layers.Concatenate(axis=-1, name='Concatenate1')(
         [normalize(inputs[v], v) for v in input_variables]
     )
-    normalized_inputs = FillNaNs(background_flag)(normalized_inputs)
+    x = FillNaNs(background_flag)(x)
 
-    # Add range folded mask if applicable
     if include_range_folded:
         range_folded = keras.Input(shape[:2] + (n_sweeps,), name='range_folded_mask')
         inputs['range_folded_mask'] = range_folded
-        normalized_inputs = keras.layers.Concatenate(axis=-1, name='Concatenate2')([normalized_inputs, range_folded])
+        x = keras.layers.Concatenate(axis=-1, name='Concatenate2')([x, range_folded])
 
-    # Add coordinates
     cin = keras.Input(c_shape, name='coordinates')
     inputs['coordinates'] = cin
 
-    ### 🔀 GATED ROUTING STARTS HERE ###
-    # Step 1: Gating network
-    gate_feat,c = CoordConv2D(filters=start_filters * widen_factor, kernel_size=3, padding="same",
-                        kernel_regularizer=keras.regularizers.l2(l2_reg),
-                        activation=None)([normalized_inputs, cin])
-    gate_pool = GlobalMaxPooling2D()(gate_feat)
-    gate_score = Dense(1, activation='sigmoid', name='gate_score')(gate_pool)  # Output in (0, 1)
-    gate_score = ExpandDimsTwice(name='expand_dims_twice')(gate_score)
+    # === Dual path structure ===
 
+    # ResNet-style path
+    path_a, c_out = wide_resnet_block(x, cin, filters=start_filters, widen_factor=1,
+                                      l2_reg=l2_reg, nconvs=nconvs, drop_rate=dropout_rate)
 
-    # Step 2: Easy and Hard paths
-    easy_path, _ = wide_resnet_block(normalized_inputs, cin,
-                                     filters=start_filters,
-                                     widen_factor=widen_factor,
-                                     l2_reg=l2_reg,
-                                     nconvs=nconvs,
-                                     drop_rate=dropout_rate)
+    # Lightweight single conv path
+    path_b, _ = CoordConv2D(filters=start_filters, kernel_size=3, padding="same",
+                            kernel_regularizer=keras.regularizers.l2(l2_reg),
+                            activation="relu")([x, cin])
+    path_b = MaxPool2D(pool_size=2, strides=2, padding='same')(path_b)
 
-    hard_path, _ = wide_resnet_block(normalized_inputs, cin,
-                                     filters=start_filters,
-                                     widen_factor=widen_factor,
-                                     l2_reg=l2_reg,
-                                     nconvs=nconvs,
-                                     drop_rate=dropout_rate)
+    # Fuse paths
+    x = keras.layers.Concatenate(axis=-1, name='fuse_paths')([path_a, path_b])
 
-    # Step 3: Soft fusion of paths
-    x = gate_score * hard_path + (1.0 - gate_score) * easy_path
-    ### 🔀 GATED ROUTING ENDS HERE ###
+    # Post-fusion conv block
+    x = Conv2D(start_filters, 3, padding='same', activation='relu',
+               kernel_regularizer=keras.regularizers.l2(l2_reg))(x)
+    x = BatchNormalization()(x)
+    x = Dropout(dropout_rate)(x)
 
-    x = se_block(x)
-    x = Conv2D(128, 3, padding='same', use_bias=False)(x)  # <-- no bias
+    # Squeeze-and-Excite block
+    x = se_block(x, ratio=16, name="se_fused")
+
+    # Optional spatial attention
+    attention_map = Conv2D(1, 1, activation='sigmoid', name='spatial_attention_map')(x)
+    attention_map = Dropout(rate=dropout_rate, name='spatial_attention_dropout')(attention_map)
+    x = Multiply(name='apply_spatial_attention')([x, attention_map])
+
+    # Head conv
+    x = Conv2D(128, 3, padding='same', use_bias=False)(x)
     x = BatchNormalization()(x)
     x = ReLU()(x)
-    attention_map = Conv2D(1, 1, activation='sigmoid', name='attention_map')(x)  # shape (B, H, W, 1)
-    attention_map = Dropout(rate=attention_dropout_rate, name='attention_dropout')(attention_map)
-    x_weighted = Multiply()([x, attention_map])
+    x = Dropout(rate=dropout_rate)(x)
 
-    x_avg = GlobalAveragePooling2D()(x_weighted)
-    x_max = GlobalMaxPooling2D()(x_weighted)
-    x_stack = StackAvgMax(name="stack_avg_max")([x_avg, x_max])
-    x_fused = Conv1D(64, 1, activation='relu')(x_stack)
-    x_fused = Flatten()(x_fused)
-    x_dense = Dense(64, activation='relu')(x_fused)
-    output = Dense(1, activation='sigmoid', dtype='float32')(x_dense)
-    return keras.Model(inputs=inputs,outputs=output)
+    # Global avg + max pooling
+    x_avg = GlobalAveragePooling2D()(x)
+    x_max = GlobalMaxPooling2D()(x)
+    x = keras.layers.Concatenate(name="global_pool_concat")([x_avg, x_max])
+
+    # Dense head
+    x = Dense(128, activation='relu', kernel_regularizer=keras.regularizers.l2(l2_reg))(x)
+    x = Dropout(dropout_rate)(x)
+    x = Dense(64, activation='relu', kernel_regularizer=keras.regularizers.l2(l2_reg))(x)
+    x = Dropout(dropout_rate // 2)(x)
+
+    output = Dense(1, activation='sigmoid', dtype='float32')(x)
+
+    return keras.Model(inputs=inputs, outputs=output, name='v7_model')
 
 
 
@@ -258,6 +239,39 @@ if gpus:
     for gpu in gpus:
         tf.config.experimental.set_memory_growth(gpu, True)
 
+
+DEFAULT_CONFIG = {
+    "epochs": 100,
+    "input_variables": ["DBZ", "VEL", "KDP", "ZDR", "RHOHV", "WIDTH"],
+    "train_years": [2013, 2014, 2015],
+    "val_years": [2021, 2022],
+    "batch_size": 128,
+    "model": "wide_resnet",
+    "start_filters": 96,
+    "learning_rate": 0.000368,
+    "decay_steps": 1386,
+    "decay_rate": 0.952,
+    "l2_reg": 4.33e-06,
+    "weights":{
+    "wN": 0.85,
+    "w0": 0.97,
+    "w1": 1.13,
+    "w2": 1.6,
+    "wW": 1.3,
+    },
+    "nconvs": 2,
+    "dropout_rate": 0.143,
+    "loss": "combo",  # << Changed from "cce"
+    "head": "maxpool",
+    "exp_name": "tornado_v7_boosted",
+    "exp_dir": ".",
+    "dataloader": "tensorflow-tfds",
+    "label_smoothing":0.065,
+    "dataloader_kwargs": {
+        "select_keys": ["DBZ", "VEL", "KDP", "RHOHV", "ZDR", "WIDTH", "range_folded_mask", "coordinates"]
+    }
+}
+
 @keras.utils.register_keras_serializable()
 class ExpandDimsTwice(keras.layers.Layer):
     def call(self, inputs):
@@ -267,50 +281,24 @@ class StackAvgMax(tf.keras.layers.Layer):
     def call(self, inputs):
         return tf.stack(inputs, axis=1)
 
-DEFAULT_CONFIG = {
-    "epochs": 25,
-    "input_variables": ["DBZ", "VEL", "KDP", "ZDR", "RHOHV", "WIDTH"],
-    "train_years": [2015,2016],
-    "val_years": [2018,2019],
-    "batch_size": 128,
-    "model": "wide_resnet",
-    "dropout_rate": 0.11236203565420874,
-    "learning_rate": 0.0007114476009343421,
-    "l2_reg": 0.000157029708840554,
-    "label_smoothing": 0.11973169683940732,
-    "start_filters": 48,
-    "decay_steps": 1386,
-    "decay_rate": 0.958,
-    "weights":{"wN": 1.0, "w0": 1.0, "w1": 1.0, "w2": 2.0, "wW": 0.5},
-    "nconvs": 2,
-    "loss": "cce", "head": "maxpool",
-    "exp_name": "tornado_baseline",
-    "exp_dir": ".", "dataloader": "tensorflow-tfds",
-    "dataloader_kwargs": {
-        "select_keys": ["DBZ", "VEL", "KDP", "RHOHV", "ZDR", "WIDTH", "range_folded_mask", "coordinates"]
-    }
-}
 def objective(trial):
     config = DEFAULT_CONFIG.copy()
 
     config.update({
         # Model capacity & regularization
-        "dropout_rate": trial.suggest_float("dropout_rate", 0.08, 0.15),
-        "start_filters": trial.suggest_categorical("start_filters", [48, 64, 96]),
-        # "nconvs": trial.suggest_int("nconvs", 2, 4),
-        "widen_factor": trial.suggest_categorical("widen_factor", [1, 2, 4]),
+        "dropout_rate": round(trial.suggest_float("dropout_rate", 0.05, 0.15),5),
+        "learning_rate": round(trial.suggest_float("learning_rate", 1e-6, 1e-5, log=True),5),
+        "l2_reg": round(trial.suggest_float("l2_reg", 1e-6, 1e-5, log=True),5),
+        "decay_steps": trial.suggest_int("decay_steps", 800, 1200),
+        "weights":{
+                "wN": round(trial.suggest_float("wN", 0.59, 1.1),5),
+                "w0": round(trial.suggest_float("w0", 0.68, 1.26),5),
+                "w1": round(trial.suggest_float("w1", 0.79, 1.47),5),
+                "w2": round(trial.suggest_float("w2", 1.12, 2.08),5),
+                "wW": round(trial.suggest_float("wW", 0.8, 1.5),5),
+        },
 
-        # Optimizer / learning schedule
-        "learning_rate": trial.suggest_float("learning_rate", 5e-4, 1.5e-3, log=True),
-        "l2_reg": trial.suggest_float("l2_reg", 1e-5, 5e-4, log=True),
-        "decay_rate": trial.suggest_float("decay_rate", 0.94, 0.99),
-        "decay_steps": trial.suggest_int("decay_steps", 800, 2000),
-
-        # Loss smoothing
-        "label_smoothing": trial.suggest_float("label_smoothing", 0.08, 0.15),
-
-        # Attention block regularization
-        "attention_dropout_rate": trial.suggest_float("attention_dropout_rate", 0.0, 0.4)
+        "label_smoothing": round(trial.suggest_float("label_smoothing", 0.05, 0.20),5),
     })
     ds_train = get_dataloader(config['dataloader'], DATA_ROOT, config['train_years'], "train",
                                 config['batch_size'], config['weights'], **config['dataloader_kwargs'])
@@ -336,7 +324,7 @@ def objective(trial):
             loss=loss,
             optimizer=opt,
             metrics=[
-            keras.metrics.AUC(from_logits=False, curve='PR', name='AUCPR', num_thresholds=200),
+            keras.metrics.AUC(from_logits=False, curve='PR', name='AUCPR', num_thresholds=1000),
             tfm.F1Score(from_logits=False, name='F1'),
             ],
             jit_compile=True

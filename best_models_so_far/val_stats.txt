@@ -1,0 +1,68 @@
+
+v1:
+INFO:root:Threshold: 0.1515
+INFO:root:Model parameters: 336,193
+INFO:root:AUCPR: 0.5038
+INFO:root:BinaryAccuracy: 0.9019
+INFO:root:TruePositives: 2182.0000
+INFO:root:FalsePositives: 4610.0000
+INFO:root:TrueNegatives: 51332.0000
+INFO:root:FalseNegatives: 1210.0000
+INFO:root:Precision: 0.3213
+INFO:root:Recall: 0.6433
+INFO:root:FalseAlarmRate: 0.0824
+INFO:root:F1: 0.4285
+INFO:root:ThreatScore: 0.2727
+
+v2:
+INFO:root:Threshold: 0.0909
+INFO:root:Model parameters: 4,814,617
+INFO:root:AUCPR: 0.4555
+INFO:root:BinaryAccuracy: 0.9565
+INFO:root:TruePositives: 1746.0000
+INFO:root:FalsePositives: 935.0000
+INFO:root:TrueNegatives: 55007.0000
+INFO:root:FalseNegatives: 1646.0000
+INFO:root:Precision: 0.6512
+INFO:root:Recall: 0.5147
+INFO:root:FalseAlarmRate: 0.0167
+INFO:root:F1: 0.5750
+INFO:root:ThreatScore: 0.4035
+v3:
+INFO:root:Threshold: 0.4343
+INFO:root:Model parameters: 4,945,562
+INFO:root:AUCPR: 0.4876
+INFO:root:BinaryAccuracy: 0.9418
+INFO:root:TruePositives: 1688.0000
+INFO:root:FalsePositives: 1749.0000
+INFO:root:TrueNegatives: 54193.0000
+INFO:root:FalseNegatives: 1704.0000
+INFO:root:Precision: 0.4911
+INFO:root:Recall: 0.4976
+INFO:root:FalseAlarmRate: 0.0313
+INFO:root:F1: 0.4944
+INFO:root:ThreatScore: 0.3283
+v4:
+
+v4tuned:
+
+v5:
+
+v6:
+
+
+
+validation data ensemble v4+v5+v6:
+INFO:root:Threshold: 0.2903
+INFO:root:Model parameters: 5,690,097
+INFO:root:AUCPR: 0.6678
+INFO:root:BinaryAccuracy: 0.9537
+INFO:root:TruePositives: 2207.0000
+INFO:root:FalsePositives: 1565.0000
+INFO:root:TrueNegatives: 54377.0000
+INFO:root:FalseNegatives: 1185.0000
+INFO:root:Precision: 0.5851
+INFO:root:Recall: 0.6506
+INFO:root:FalseAlarmRate: 0.0280
+INFO:root:F1: 0.6161
+INFO:root:ThreatScore: 0.4452

@@ -73,7 +73,7 @@ def build_model(model='wide_resnet',shape:Tuple[int]=(120,240,2),
                 nconvs:int=2,
                 l2_reg:float=0.001,
                 background_flag:float=-3.0,
-                include_range_folded:bool=True,dropout_rate=0.1):
+                include_range_folded:bool=True,dropout_rate=0.1,**config):
     # Create input layers for each input_variables
     inputs = {}
     for v in input_variables:
@@ -102,15 +102,13 @@ def build_model(model='wide_resnet',shape:Tuple[int]=(120,240,2),
     x,c = normalized_inputs,cin
     
     if model == 'wide_resnet':
-        x, c = wide_resnet_block(x, c, filters=start_filters, widen_factor=2, l2_reg=l2_reg,nconvs=nconvs, drop_rate=dropout_rate)
-        #x, c = wide_resnet_block(x, c, filters=start_filters*2, widen_factor=2, l2_reg=l2_reg,nconvs=nconvs, drop_rate=dropout_rate)
-        #x, c = wide_resnet_block(x, c, filters=start_filters*4, widen_factor=2, l2_reg=l2_reg,nconvs=nconvs, drop_rate=dropout_rate)
+        x, c = wide_resnet_block(x, c, filters=start_filters, widen_factor=config['widen_factor'], l2_reg=l2_reg,nconvs=nconvs, drop_rate=dropout_rate)
         x=se_block(x)
     x = Conv2D(128, 3, padding='same', use_bias=False)(x)  # <-- no bias
     x = BatchNormalization()(x)
     x = ReLU()(x)
     attention_map = Conv2D(1, 1, activation='sigmoid', name='attention_map',use_bias=False)(x)  # shape (B, H, W, 1)
-    attention_map = Dropout(rate=0.2, name='attention_dropout')(attention_map)
+    attention_map = Dropout(rate=config['attn_dropout'], name='attention_dropout')(attention_map)
     x_weighted = Multiply()([x, attention_map])
 
     x_avg = GlobalAveragePooling2D()(x_weighted)
@@ -215,19 +213,23 @@ DEFAULT_CONFIG={"epochs":100,
                 "train_years": [2013,2014,2015,2016,2017,2018,2019,2020], 
                 "val_years": [2021,2022], "batch_size": 128
                 , "model": "wide_resnet", 
-                    'start_filters':48,
-                    'learning_rate':1e-4,
-                    'decay_steps':1386,
-                    'decay_rate':0.958,
-                    "weight_decay": 2.63e-7,
-                    'l2_reg':1e-5,
+                "dropout_rate": 0.06547483450184828,
+            "learning_rate": 0.0005345166110646819,
+            "l2_reg": 5.975027999960295e-06,
+            "decay_steps": 1520,
+            "label_smoothing": 0.09675666141341166,
+            "nconvs": 2,
+            "widen_factor": 1,
+            "start_filters": 48,
+            "attn_dropout": 0.28437484700462334,
                     'wN':1.0,
                     'w0':1.0,
                     'w1':1.0,
                     'w2':2.0,
                     'wW':0.5,
                     'nconvs':2,
-                    "dropout_rate":0.1,
+                    'decay_rate':0.958,
+
                 "loss": "cce", "head": "maxpool", "exp_name": "tornado_baseline", "exp_dir": ".",
                   "dataloader": "tensorflow-tfds", 
                   "dataloader_kwargs": {"select_keys": ["DBZ", "VEL", "KDP", "RHOHV", "ZDR", "WIDTH", "range_folded_mask", "coordinates"]}}
@@ -269,43 +271,21 @@ def main(config):
     
     in_shapes = (120, 240, get_shape(x)[-1])
     c_shapes = (120, 240, x["coordinates"].shape[-1])
-    nn = build_model(model=model,shape=in_shapes, c_shape=c_shapes, start_filters=start_filters, 
-                         l2_reg=l2_reg, input_variables=input_variables,dropout_rate=dropout_rate)
+    nn = build_model(
+        shape=in_shapes,
+        c_shape=c_shapes,
+        **config
+    )
     print(nn.summary())
     
     # Loss Function
     # Optimizer with Learning Rate Decay
     from_logits=False
 
-    def focal_loss(gamma=2.0, alpha=0.85):
-        def loss_fn(y_true, y_pred):
-            epsilon = tf.keras.backend.epsilon()
-            y_pred = tf.clip_by_value(y_pred, epsilon, 1. - epsilon)
-            pt = tf.where(tf.equal(y_true, 1), y_pred, 1 - y_pred)
-            return -tf.reduce_mean(alpha * tf.pow(1. - pt, gamma) * tf.math.log(pt))
-        return loss_fn
-    def tversky_loss(alpha=0.3, beta=0.7, smooth=1e-6):
-        """
-        Tversky Loss: adjusts trade-off between FP and FN.
-        alpha = weight for FP
-        beta = weight for FN
-        """
-        def loss_fn(y_true, y_pred):
-            y_true = tf.cast(y_true, tf.float32)
-            y_pred = tf.cast(y_pred, tf.float32)
-            tp = tf.reduce_sum(y_true * y_pred)
-            fp = tf.reduce_sum((1 - y_true) * y_pred)
-            fn = tf.reduce_sum(y_true * (1 - y_pred))
-            return 1 - (tp + smooth) / (tp + alpha * fp + beta * fn + smooth)
-        return loss_fn
-    def combo_loss(alpha=0.7):
-        return lambda y_true, y_pred: alpha * tversky_loss(alpha=0.5, beta=0.5)(y_true, y_pred) + \
-                                    (1 - alpha) * focal_loss(gamma=2.0, alpha=0.85)(y_true, y_pred)
-
     lr=keras.optimizers.schedules.ExponentialDecay(
                 config['learning_rate'], config['decay_steps'], config['decay_rate'], staircase=False, name="exp_decay")
     loss = keras.losses.BinaryCrossentropy( from_logits=from_logits, 
-                                                    label_smoothing=0.1 )
+                                                    label_smoothing=config['label_smoothing'] )
     opt  = keras.optimizers.Adam(learning_rate=lr)
     from_logits=False
 

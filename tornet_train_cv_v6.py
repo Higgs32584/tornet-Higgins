@@ -17,7 +17,10 @@ from tensorflow.keras.layers import (
     Conv2D,
     GlobalMaxPooling2D,
     Reshape,
-    ReLU
+    ReLU,
+    Lambda,
+    Conv1D,
+    Flatten
 )
 from tensorflow.keras.optimizers import AdamW
 from tensorflow.keras.optimizers.schedules import CosineDecayRestarts
@@ -49,6 +52,8 @@ EXP_DIR = "."
 os.environ['TORNET_ROOT'] = DATA_ROOT
 os.environ['TFDS_DATA_DIR'] = TFDS_DATA_DIR
 os.environ["TF_XLA_FLAGS"] = "--tf_xla_auto_jit=2"
+tf.config.optimizer.set_jit(True)
+
 
 
 logging.info(f'TORNET_ROOT={DATA_ROOT}')
@@ -74,53 +79,92 @@ def build_model(model='wide_resnet',shape:Tuple[int]=(120,240,2),
                 l2_reg:float=0.001,
                 background_flag:float=-3.0,
                 include_range_folded:bool=True,dropout_rate=0.1):
+    
     # Create input layers for each input_variables
     inputs = {}
     for v in input_variables:
-        inputs[v]=keras.Input(shape,name=v)
-    n_sweeps=shape[2]
-    
-    # Normalize inputs and concate along channel dim
-    normalized_inputs=keras.layers.Concatenate(axis=-1,name='Concatenate1')(
-        [normalize(inputs[v],v) for v in input_variables]
-        )
+        inputs[v] = keras.Input(shape, name=v)
+    n_sweeps = shape[2]
 
-    # Replace nan pixel with background flag
+    # Normalize and concatenate
+    normalized_inputs = keras.layers.Concatenate(axis=-1, name='Concatenate1')(
+        [normalize(inputs[v], v) for v in input_variables]
+    )
     normalized_inputs = FillNaNs(background_flag)(normalized_inputs)
 
-    # Add channel for range folded gates
+    # Add range folded mask if applicable
     if include_range_folded:
-        range_folded = keras.Input(shape[:2]+(n_sweeps,),name='range_folded_mask')
-        inputs['range_folded_mask']=range_folded
-        normalized_inputs = keras.layers.Concatenate(axis=-1,name='Concatenate2')(
-               [normalized_inputs,range_folded])
-        
-    # Input coordinate information
-    cin=keras.Input(c_shape,name='coordinates')
-    inputs['coordinates']=cin
-    
-    x,c = normalized_inputs,cin
-    
-    if model == 'wide_resnet':
-        x, c = wide_resnet_block(x, c, filters=start_filters, widen_factor=2, l2_reg=l2_reg,nconvs=nconvs, drop_rate=dropout_rate)
-        #x, c = wide_resnet_block(x, c, filters=start_filters*2, widen_factor=2, l2_reg=l2_reg,nconvs=nconvs, drop_rate=dropout_rate)
-        #x, c = wide_resnet_block(x, c, filters=start_filters*4, widen_factor=2, l2_reg=l2_reg,nconvs=nconvs, drop_rate=dropout_rate)
-        x=se_block(x)
+        range_folded = keras.Input(shape[:2] + (n_sweeps,), name='range_folded_mask')
+        inputs['range_folded_mask'] = range_folded
+        normalized_inputs = keras.layers.Concatenate(axis=-1, name='Concatenate2')([normalized_inputs, range_folded])
+
+    # Add coordinates
+    cin = keras.Input(c_shape, name='coordinates')
+    inputs['coordinates'] = cin
+
+    # Step 2: Easy and Hard paths
+    easy_path, _ = wide_resnet_block(normalized_inputs, cin,
+                                     filters=start_filters,
+                                     widen_factor=2,
+                                     l2_reg=l2_reg,
+                                     nconvs=2,
+                                     drop_rate=dropout_rate)
+
+    hard_path, _ = deep_block(normalized_inputs, cin,
+                                     filters=start_filters,
+                                     widen_factor=2,
+                                     l2_reg=l2_reg,
+                                     nconvs=4,
+                                     drop_rate=dropout_rate)
+
+    # Step 3: Soft fusion of paths
+    x = Add()[easy_path,hard_path]
+    ### 🔀 GATED ROUTING ENDS HERE ###
+
+    x = se_block(x)
     x = Conv2D(128, 3, padding='same', use_bias=False)(x)  # <-- no bias
     x = BatchNormalization()(x)
     x = ReLU()(x)
-    attention_map = Conv2D(1, 1, activation='sigmoid', name='attention_map',use_bias=False)(x)  # shape (B, H, W, 1)
+    attention_map = Conv2D(1, 1, activation='sigmoid', name='attention_map')(x)  # shape (B, H, W, 1)
     attention_map = Dropout(rate=0.2, name='attention_dropout')(attention_map)
     x_weighted = Multiply()([x, attention_map])
 
     x_avg = GlobalAveragePooling2D()(x_weighted)
     x_max = GlobalMaxPooling2D()(x_weighted)
-    x_concat = keras.layers.Concatenate()([x_avg, x_max])
-
-
-    x_dense = Dense(64, activation='relu')(x_concat)
+    x_stack = StackAvgMax(name="stack_avg_max")([x_avg, x_max])
+    x_fused = Conv1D(64, 1, activation='relu')(x_stack)
+    x_fused = Flatten()(x_fused)
+    x_dense = Dense(64, activation='relu')(x_fused)
     output = Dense(1, activation='sigmoid', dtype='float32')(x_dense)
     return keras.Model(inputs=inputs,outputs=output)
+
+def wide_resnet_block(x, c, filters=64, widen_factor=2, l2_reg=1e-6, drop_rate=0.1):
+    """Wide ResNet Block with CoordConv2D"""
+    shortcut_x, shortcut_c = x, c  # Skip connection
+    x = BatchNormalization()(x)
+    x= ReLU()(x)
+    x, c = CoordConv2D(filters=filters * widen_factor, kernel_size=3,strides=(2,2), padding="same",
+                    kernel_regularizer=keras.regularizers.l2(l2_reg),
+                    activation=None)([x, c])
+    if drop_rate > 0:
+        x = Dropout(rate=drop_rate)(x)
+    x = BatchNormalization()(x)
+    x= ReLU()(x)
+    x, c = CoordConv2D(filters=filters * widen_factor, kernel_size=3, padding="same",
+                        kernel_regularizer=keras.regularizers.l2(l2_reg),
+                        activation=None)([x, c])
+    # Skip Connection
+    shortcut_x, shortcut_c = CoordConv2D(filters=filters * widen_factor, kernel_size=1, padding="same",
+                                         kernel_regularizer=keras.regularizers.l2(l2_reg), strides=(2,2),
+                                         activation=None)([shortcut_x, shortcut_c])
+    
+
+    # Add Residual Connection
+    x = Add()([x, shortcut_x])
+    x = ReLU()(x)
+    
+    return x, c
+
 
 def se_block(x, ratio=16, name=None):
     filters = x.shape[-1]
@@ -140,7 +184,7 @@ def se_block(x, ratio=16, name=None):
     return x
 
 
-def wide_resnet_block(x, c, filters=64, widen_factor=2, l2_reg=1e-6, drop_rate=0.1,nconvs=2):
+def deep_block(x, c, filters=64, widen_factor=2, l2_reg=1e-6, drop_rate=0.1,nconvs=2):
     """Wide ResNet Block with CoordConv2D"""
     shortcut_x, shortcut_c = x, c  # Skip connection
 
@@ -219,7 +263,6 @@ DEFAULT_CONFIG={"epochs":100,
                     'learning_rate':1e-4,
                     'decay_steps':1386,
                     'decay_rate':0.958,
-                    "weight_decay": 2.63e-7,
                     'l2_reg':1e-5,
                     'wN':1.0,
                     'w0':1.0,
@@ -232,13 +275,25 @@ DEFAULT_CONFIG={"epochs":100,
                   "dataloader": "tensorflow-tfds", 
                   "dataloader_kwargs": {"select_keys": ["DBZ", "VEL", "KDP", "RHOHV", "ZDR", "WIDTH", "range_folded_mask", "coordinates"]}}
 
+
+@keras.utils.register_keras_serializable()
+class ExpandDimsTwice(keras.layers.Layer):
+    def call(self, inputs):
+        return tf.expand_dims(tf.expand_dims(inputs, axis=1), axis=1)
+@keras.utils.register_keras_serializable()
+class StackAvgMax(tf.keras.layers.Layer):
+    def call(self, inputs):
+        return tf.stack(inputs, axis=1)
+
+
+
 def main(config):
     # Gather all hyperparams
     epochs=config.get('epochs')
     batch_size=config.get('batch_size')
     start_filters=config.get('start_filters')
     dropout_rate=config.get('dropout_rate')
-    first_decay_steps=config.get('decay_steps')
+    first_decay_steps=config.get('first_decay_steps')
     lr=config.get('learning_rate')
     l2_reg=config.get('l2_reg')
     wN=config.get('wN')
@@ -276,72 +331,14 @@ def main(config):
     # Loss Function
     # Optimizer with Learning Rate Decay
     from_logits=False
-
-    def focal_loss(gamma=2.0, alpha=0.85):
-        def loss_fn(y_true, y_pred):
-            epsilon = tf.keras.backend.epsilon()
-            y_pred = tf.clip_by_value(y_pred, epsilon, 1. - epsilon)
-            pt = tf.where(tf.equal(y_true, 1), y_pred, 1 - y_pred)
-            return -tf.reduce_mean(alpha * tf.pow(1. - pt, gamma) * tf.math.log(pt))
-        return loss_fn
-    def tversky_loss(alpha=0.3, beta=0.7, smooth=1e-6):
-        """
-        Tversky Loss: adjusts trade-off between FP and FN.
-        alpha = weight for FP
-        beta = weight for FN
-        """
-        def loss_fn(y_true, y_pred):
-            y_true = tf.cast(y_true, tf.float32)
-            y_pred = tf.cast(y_pred, tf.float32)
-            tp = tf.reduce_sum(y_true * y_pred)
-            fp = tf.reduce_sum((1 - y_true) * y_pred)
-            fn = tf.reduce_sum(y_true * (1 - y_pred))
-            return 1 - (tp + smooth) / (tp + alpha * fp + beta * fn + smooth)
-        return loss_fn
-    def combo_loss(alpha=0.7):
-        return lambda y_true, y_pred: alpha * tversky_loss(alpha=0.5, beta=0.5)(y_true, y_pred) + \
-                                    (1 - alpha) * focal_loss(gamma=2.0, alpha=0.85)(y_true, y_pred)
-
     lr=keras.optimizers.schedules.ExponentialDecay(
                 config['learning_rate'], config['decay_steps'], config['decay_rate'], staircase=False, name="exp_decay")
     loss = keras.losses.BinaryCrossentropy( from_logits=from_logits, 
                                                     label_smoothing=0.1 )
     opt  = keras.optimizers.Adam(learning_rate=lr)
-    from_logits=False
-
-    def focal_loss(gamma=2.0, alpha=0.85):
-        def loss_fn(y_true, y_pred):
-            epsilon = tf.keras.backend.epsilon()
-            y_pred = tf.clip_by_value(y_pred, epsilon, 1. - epsilon)
-            pt = tf.where(tf.equal(y_true, 1), y_pred, 1 - y_pred)
-            return -tf.reduce_mean(alpha * tf.pow(1. - pt, gamma) * tf.math.log(pt))
-        return loss_fn
-    def tversky_loss(alpha=0.3, beta=0.7, smooth=1e-6):
-        """
-        Tversky Loss: adjusts trade-off between FP and FN.
-        alpha = weight for FP
-        beta = weight for FN
-        """
-        def loss_fn(y_true, y_pred):
-            y_true = tf.cast(y_true, tf.float32)
-            y_pred = tf.cast(y_pred, tf.float32)
-            tp = tf.reduce_sum(y_true * y_pred)
-            fp = tf.reduce_sum((1 - y_true) * y_pred)
-            fn = tf.reduce_sum(y_true * (1 - y_pred))
-            return 1 - (tp + smooth) / (tp + alpha * fp + beta * fn + smooth)
-        return loss_fn
-    def combo_loss(alpha=0.7):
-        return lambda y_true, y_pred: alpha * tversky_loss(alpha=0.5, beta=0.5)(y_true, y_pred) + \
-                                    (1 - alpha) * focal_loss(gamma=2.0, alpha=0.85)(y_true, y_pred)
-    lr=keras.optimizers.schedules.ExponentialDecay(
-                config['learning_rate'], config['decay_steps'], config['decay_rate'], staircase=False, name="exp_decay")
-    loss = keras.losses.BinaryCrossentropy( from_logits=from_logits, 
-                                                    label_smoothing=0.1 )
-    opt  = keras.optimizers.Adam(learning_rate=lr)
-
-
     # Metrics (Optimize AUCPR)
-    metrics = [keras.metrics.AUC(from_logits=from_logits,curve='PR',name='AUCPR',num_thresholds=1000), 
+    metrics = [keras.metrics.AUC(from_logits=from_logits,curve='PR',name='AUCPR',num_thresholds=2000), 
+               keras.metrics.AUC(from_logits=from_logits,name='AUC',num_thresholds=2000),
                 tfm.BinaryAccuracy(from_logits,name='BinaryAccuracy'), 
                 tfm.TruePositives(from_logits,name='TruePositives'),
                 tfm.FalsePositives(from_logits,name='FalsePositives'), 
@@ -349,39 +346,15 @@ def main(config):
                 tfm.FalseNegatives(from_logits,name='FalseNegatives'), 
                 tfm.Precision(from_logits,name='Precision'), 
                 tfm.Recall(from_logits,name='Recall'),
-                FalseAlarmRate(name='FalseAlarmRate'),
                 tfm.F1Score(from_logits=from_logits,name='F1'),
-                ThreatScore(name='ThreatScore')]
+                ]
     
     nn.compile(loss=loss, metrics=metrics, optimizer=opt,jit_compile=True)
-    
-    # Experiment Directory
-    expdir = make_exp_dir(exp_dir=exp_dir, prefix=exp_name)
-    with open(os.path.join(expdir,'data.json'),'w') as f:
-        json.dump(
-            {'data_root':DATA_ROOT,
-             'train_data':list(train_years), 
-             'val_data':list(val_years)},f)
-    with open(os.path.join(expdir,'params.json'),'w') as f:
-        json.dump({'config':config},f)
-    # Copy the training script
-    shutil.copy(__file__, os.path.join(expdir,'train.py')) 
-    # Callbacks (Now Monitors AUCPR)
-    checkpoint_name = os.path.join(expdir, 'tornadoDetector_{epoch:03d}.keras')
     callbacks = [
-        keras.callbacks.ModelCheckpoint(checkpoint_name, monitor='val_AUCPR', save_best_only=False),
-        keras.callbacks.CSVLogger(os.path.join(expdir, 'history.csv')),
         keras.callbacks.TerminateOnNaN(),
-        keras.callbacks.EarlyStopping(monitor='val_AUCPR', patience=5, mode='max', restore_best_weights=True),
-        keras.callbacks.EarlyStopping(monitor='val_F1', patience=5, mode='max', restore_best_weights=True),
-
+        keras.callbacks.EarlyStopping(monitor='val_AUCPR', patience=5, mode='max', restore_best_weights=True)
     ]
     
-    # TensorBoard Logging
-    if keras.config.backend() == "tensorflow":
-        callbacks.append(keras.callbacks.TensorBoard(log_dir=os.path.join(expdir, 'logs'), write_graph=False))
-    
-    # Train Model
     history = nn.fit(ds_train, epochs=epochs, validation_data=ds_val, callbacks=callbacks, verbose=1)
     
     # Get Best Metrics
@@ -391,5 +364,47 @@ def main(config):
 if __name__ == '__main__':
     config = DEFAULT_CONFIG
     if len(sys.argv) > 1:
-            config.update(json.load(open(sys.argv[1], 'r')))
-    main(config)
+        config.update(json.load(open(sys.argv[1], 'r')))
+
+    # Define CV folds
+    folds = [
+        {
+            "train_years": [2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022],
+            "val_years": [2013, 2014],
+        },
+        {
+            "train_years": [2013, 2014, 2017, 2018, 2019, 2020, 2021, 2022],
+            "val_years": [2015, 2016],
+        },
+        {
+            "train_years": [2013, 2014, 2015, 2016, 2019, 2020, 2021, 2022],
+            "val_years": [2017, 2018],
+        },
+        {
+            "train_years": [2013, 2014, 2015, 2016, 2017, 2018, 2021, 2022],
+            "val_years": [2019, 2020],
+        },
+        {
+            "train_years": [2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020],
+            "val_years": [2021, 2022],
+        }
+        ]
+
+
+    results = []
+
+    for i, fold in enumerate(folds):
+        print(f"\n================ Fold {i + 1}: Train {fold['train_years']} | Test {fold['val_years']} ================\n")
+        fold_config = config.copy()
+        fold_config['train_years'] = fold['train_years']
+        fold_config['val_years'] = fold['val_years']
+        fold_config['exp_name'] = f"{config['exp_name']}_fold{i+1}"
+        fold_result = main(fold_config)
+        results.append({"fold": i + 1, **fold_result})
+
+    # Print Summary
+    print("\n================ Cross-Validation Summary ================\n")
+    for res in results:
+        print(f"Fold {res['fold']} - AUCPR: {res['AUCPR']:.4f}")
+    mean_aucpr = np.mean([res["AUCPR"] for res in results])
+    print(f"\nMean AUCPR over all folds: {mean_aucpr:.4f}")

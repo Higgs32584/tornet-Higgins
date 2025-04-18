@@ -49,7 +49,7 @@ EXP_DIR = "."
 os.environ['TORNET_ROOT'] = DATA_ROOT
 os.environ['TFDS_DATA_DIR'] = TFDS_DATA_DIR
 os.environ["TF_XLA_FLAGS"] = "--tf_xla_auto_jit=2"
-
+tf.config.optimizer.set_jit(True)
 
 logging.info(f'TORNET_ROOT={DATA_ROOT}')
 
@@ -143,8 +143,6 @@ def se_block(x, ratio=16, name=None):
 def wide_resnet_block(x, c, filters=64, widen_factor=2, l2_reg=1e-6, drop_rate=0.1,nconvs=2):
     """Wide ResNet Block with CoordConv2D"""
     shortcut_x, shortcut_c = x, c  # Skip connection
-
-    # 3x3 CoordConv2D (Wider filters)
     for i in range(nconvs):
         x = BatchNormalization()(x)
         x= ReLU()(x)
@@ -155,19 +153,12 @@ def wide_resnet_block(x, c, filters=64, widen_factor=2, l2_reg=1e-6, drop_rate=0
     shortcut_x, shortcut_c = CoordConv2D(filters=filters * widen_factor, kernel_size=1, padding="same",
                                          kernel_regularizer=keras.regularizers.l2(l2_reg),
                                          activation=None)([shortcut_x, shortcut_c])
-    
-
-    # Add Residual Connection
     x = ReLU()(x)
     x = Add()([x, shortcut_x])
-
-    # Pooling and dropout
     x = MaxPool2D(pool_size=2, strides=2, padding='same')(x)
     c = MaxPool2D(pool_size=2, strides=2, padding='same')(c)
-
     if drop_rate > 0:
         x = Dropout(rate=drop_rate)(x)
-    
     return x, c
 
 
@@ -215,11 +206,10 @@ DEFAULT_CONFIG={"epochs":100,
                 "train_years": [2013,2014,2015,2016,2017,2018,2019,2020], 
                 "val_years": [2021,2022], "batch_size": 128
                 , "model": "wide_resnet", 
-                    'start_filters':48,
+                    'start_filters':96,
                     'learning_rate':1e-4,
                     'decay_steps':1386,
                     'decay_rate':0.958,
-                    "weight_decay": 2.63e-7,
                     'l2_reg':1e-5,
                     'wN':1.0,
                     'w0':1.0,
@@ -231,14 +221,13 @@ DEFAULT_CONFIG={"epochs":100,
                 "loss": "cce", "head": "maxpool", "exp_name": "tornado_baseline", "exp_dir": ".",
                   "dataloader": "tensorflow-tfds", 
                   "dataloader_kwargs": {"select_keys": ["DBZ", "VEL", "KDP", "RHOHV", "ZDR", "WIDTH", "range_folded_mask", "coordinates"]}}
-
 def main(config):
     # Gather all hyperparams
     epochs=config.get('epochs')
     batch_size=config.get('batch_size')
     start_filters=config.get('start_filters')
     dropout_rate=config.get('dropout_rate')
-    first_decay_steps=config.get('decay_steps')
+    first_decay_steps=config.get('first_decay_steps')
     lr=config.get('learning_rate')
     l2_reg=config.get('l2_reg')
     wN=config.get('wN')
@@ -276,72 +265,14 @@ def main(config):
     # Loss Function
     # Optimizer with Learning Rate Decay
     from_logits=False
-
-    def focal_loss(gamma=2.0, alpha=0.85):
-        def loss_fn(y_true, y_pred):
-            epsilon = tf.keras.backend.epsilon()
-            y_pred = tf.clip_by_value(y_pred, epsilon, 1. - epsilon)
-            pt = tf.where(tf.equal(y_true, 1), y_pred, 1 - y_pred)
-            return -tf.reduce_mean(alpha * tf.pow(1. - pt, gamma) * tf.math.log(pt))
-        return loss_fn
-    def tversky_loss(alpha=0.3, beta=0.7, smooth=1e-6):
-        """
-        Tversky Loss: adjusts trade-off between FP and FN.
-        alpha = weight for FP
-        beta = weight for FN
-        """
-        def loss_fn(y_true, y_pred):
-            y_true = tf.cast(y_true, tf.float32)
-            y_pred = tf.cast(y_pred, tf.float32)
-            tp = tf.reduce_sum(y_true * y_pred)
-            fp = tf.reduce_sum((1 - y_true) * y_pred)
-            fn = tf.reduce_sum(y_true * (1 - y_pred))
-            return 1 - (tp + smooth) / (tp + alpha * fp + beta * fn + smooth)
-        return loss_fn
-    def combo_loss(alpha=0.7):
-        return lambda y_true, y_pred: alpha * tversky_loss(alpha=0.5, beta=0.5)(y_true, y_pred) + \
-                                    (1 - alpha) * focal_loss(gamma=2.0, alpha=0.85)(y_true, y_pred)
-
     lr=keras.optimizers.schedules.ExponentialDecay(
                 config['learning_rate'], config['decay_steps'], config['decay_rate'], staircase=False, name="exp_decay")
     loss = keras.losses.BinaryCrossentropy( from_logits=from_logits, 
                                                     label_smoothing=0.1 )
     opt  = keras.optimizers.Adam(learning_rate=lr)
-    from_logits=False
-
-    def focal_loss(gamma=2.0, alpha=0.85):
-        def loss_fn(y_true, y_pred):
-            epsilon = tf.keras.backend.epsilon()
-            y_pred = tf.clip_by_value(y_pred, epsilon, 1. - epsilon)
-            pt = tf.where(tf.equal(y_true, 1), y_pred, 1 - y_pred)
-            return -tf.reduce_mean(alpha * tf.pow(1. - pt, gamma) * tf.math.log(pt))
-        return loss_fn
-    def tversky_loss(alpha=0.3, beta=0.7, smooth=1e-6):
-        """
-        Tversky Loss: adjusts trade-off between FP and FN.
-        alpha = weight for FP
-        beta = weight for FN
-        """
-        def loss_fn(y_true, y_pred):
-            y_true = tf.cast(y_true, tf.float32)
-            y_pred = tf.cast(y_pred, tf.float32)
-            tp = tf.reduce_sum(y_true * y_pred)
-            fp = tf.reduce_sum((1 - y_true) * y_pred)
-            fn = tf.reduce_sum(y_true * (1 - y_pred))
-            return 1 - (tp + smooth) / (tp + alpha * fp + beta * fn + smooth)
-        return loss_fn
-    def combo_loss(alpha=0.7):
-        return lambda y_true, y_pred: alpha * tversky_loss(alpha=0.5, beta=0.5)(y_true, y_pred) + \
-                                    (1 - alpha) * focal_loss(gamma=2.0, alpha=0.85)(y_true, y_pred)
-    lr=keras.optimizers.schedules.ExponentialDecay(
-                config['learning_rate'], config['decay_steps'], config['decay_rate'], staircase=False, name="exp_decay")
-    loss = keras.losses.BinaryCrossentropy( from_logits=from_logits, 
-                                                    label_smoothing=0.1 )
-    opt  = keras.optimizers.Adam(learning_rate=lr)
-
-
     # Metrics (Optimize AUCPR)
-    metrics = [keras.metrics.AUC(from_logits=from_logits,curve='PR',name='AUCPR',num_thresholds=1000), 
+    metrics = [keras.metrics.AUC(from_logits=from_logits,curve='PR',name='AUCPR',num_thresholds=2000), 
+               keras.metrics.AUC(from_logits=from_logits,name='AUC',num_thresholds=2000),
                 tfm.BinaryAccuracy(from_logits,name='BinaryAccuracy'), 
                 tfm.TruePositives(from_logits,name='TruePositives'),
                 tfm.FalsePositives(from_logits,name='FalsePositives'), 
@@ -349,39 +280,15 @@ def main(config):
                 tfm.FalseNegatives(from_logits,name='FalseNegatives'), 
                 tfm.Precision(from_logits,name='Precision'), 
                 tfm.Recall(from_logits,name='Recall'),
-                FalseAlarmRate(name='FalseAlarmRate'),
                 tfm.F1Score(from_logits=from_logits,name='F1'),
-                ThreatScore(name='ThreatScore')]
+                ]
     
     nn.compile(loss=loss, metrics=metrics, optimizer=opt,jit_compile=True)
-    
-    # Experiment Directory
-    expdir = make_exp_dir(exp_dir=exp_dir, prefix=exp_name)
-    with open(os.path.join(expdir,'data.json'),'w') as f:
-        json.dump(
-            {'data_root':DATA_ROOT,
-             'train_data':list(train_years), 
-             'val_data':list(val_years)},f)
-    with open(os.path.join(expdir,'params.json'),'w') as f:
-        json.dump({'config':config},f)
-    # Copy the training script
-    shutil.copy(__file__, os.path.join(expdir,'train.py')) 
-    # Callbacks (Now Monitors AUCPR)
-    checkpoint_name = os.path.join(expdir, 'tornadoDetector_{epoch:03d}.keras')
     callbacks = [
-        keras.callbacks.ModelCheckpoint(checkpoint_name, monitor='val_AUCPR', save_best_only=False),
-        keras.callbacks.CSVLogger(os.path.join(expdir, 'history.csv')),
         keras.callbacks.TerminateOnNaN(),
-        keras.callbacks.EarlyStopping(monitor='val_AUCPR', patience=5, mode='max', restore_best_weights=True),
-        keras.callbacks.EarlyStopping(monitor='val_F1', patience=5, mode='max', restore_best_weights=True),
-
+        keras.callbacks.EarlyStopping(monitor='val_AUCPR', patience=5, mode='max', restore_best_weights=True)
     ]
     
-    # TensorBoard Logging
-    if keras.config.backend() == "tensorflow":
-        callbacks.append(keras.callbacks.TensorBoard(log_dir=os.path.join(expdir, 'logs'), write_graph=False))
-    
-    # Train Model
     history = nn.fit(ds_train, epochs=epochs, validation_data=ds_val, callbacks=callbacks, verbose=1)
     
     # Get Best Metrics
@@ -391,5 +298,47 @@ def main(config):
 if __name__ == '__main__':
     config = DEFAULT_CONFIG
     if len(sys.argv) > 1:
-            config.update(json.load(open(sys.argv[1], 'r')))
-    main(config)
+        config.update(json.load(open(sys.argv[1], 'r')))
+
+    # Define CV folds
+    folds = [
+        {
+            "train_years": [2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022],
+            "val_years": [2013, 2014],
+        },
+        {
+            "train_years": [2013, 2014, 2017, 2018, 2019, 2020, 2021, 2022],
+            "val_years": [2015, 2016],
+        },
+        {
+            "train_years": [2013, 2014, 2015, 2016, 2019, 2020, 2021, 2022],
+            "val_years": [2017, 2018],
+        },
+        {
+            "train_years": [2013, 2014, 2015, 2016, 2017, 2018, 2021, 2022],
+            "val_years": [2019, 2020],
+        },
+        {
+            "train_years": [2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020],
+            "val_years": [2021, 2022],
+        }
+        ]
+
+
+    results = []
+
+    for i, fold in enumerate(folds):
+        print(f"\n================ Fold {i + 1}: Train {fold['train_years']} | Test {fold['val_years']} ================\n")
+        fold_config = config.copy()
+        fold_config['train_years'] = fold['train_years']
+        fold_config['val_years'] = fold['val_years']
+        fold_config['exp_name'] = f"{config['exp_name']}_fold{i+1}"
+        fold_result = main(fold_config)
+        results.append({"fold": i + 1, **fold_result})
+
+    # Print Summary
+    print("\n================ Cross-Validation Summary ================\n")
+    for res in results:
+        print(f"Fold {res['fold']} - AUCPR: {res['AUCPR']:.4f}")
+    mean_aucpr = np.mean([res["AUCPR"] for res in results])
+    print(f"\nMean AUCPR over all folds: {mean_aucpr:.4f}")
