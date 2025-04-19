@@ -1,2 +1,0 @@
-predicated on the assumption that nconvs=6 for a deeper layer and nconvs=2 
-for a shallower layer would lead to a better outcome in a wide_resnet
