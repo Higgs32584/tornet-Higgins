@@ -24,7 +24,7 @@ tornet_baseline was 18.8 MB
 - Utilizes Wide Resnet implementation for more dynamic and lightweight prediction
 
 ### ✅ Version 6 – Gated Wide ResNet
-- 6.44 MB parameters.
+- 6.44 MB
 - Dynamically blends shallow vs. deep inference paths for "easy" and "hard" tornado cases.
 - Introduces learned gating for adaptive computation.
 
