@@ -3,35 +3,81 @@ import logging
 import os
 
 import tensorflow as tf
-from custom_func import FalseAlarmRate, ThreatScore
 from tensorflow import keras
 
 from tornet.data.loader import get_dataloader
 from tornet.metrics.keras import metrics as tfm
 
 logging.basicConfig(level=logging.INFO)
+from custom_func import FalseAlarmRate, ThreatScore
 
 TFDS_DATA_DIR = "/home/ubuntu/tfds"
 EXP_DIR = os.environ.get("EXP_DIR", ".")
 TORNET_ROOT = TFDS_DATA_DIR
 # TFDS_DATA_DIR=os.environ['TFDS_DATA_DIR']
+import tensorflow_datasets as tfds
 
+import tornet.data.tfds.tornet.tornet_dataset_builder  # registers 'tornet'
+from tornet.models.keras.layers import CoordConv2D
 
-# Environment Variables with Defaults (can be overridden externally)
-DATA_ROOT = os.environ.get("DATA_ROOT", "/home/ubuntu/tfds")
-TORNET_ROOT = os.environ.get("TORNET_ROOT", DATA_ROOT)
-TFDS_DATA_DIR = os.environ.get("TFDS_DATA_DIR", DATA_ROOT)
-EXP_DIR = os.environ.get("EXP_DIR", ".")
-
-# Set variables if not already defined (avoid overwriting existing ones)
-os.environ.setdefault("TORNET_ROOT", TORNET_ROOT)
-os.environ.setdefault("TFDS_DATA_DIR", TFDS_DATA_DIR)
-os.environ.setdefault("EXP_DIR", EXP_DIR)
-os.environ.setdefault("TF_XLA_FLAGS", "--tf_xla_auto_jit=2")
+EXP_DIR = "."
+DATA_ROOT = "/home/ubuntu/tfds"
+TORNET_ROOT = DATA_ROOT
+TFDS_DATA_DIR = "/home/ubuntu/tfds"
+DATA_ROOT = "/home/ubuntu/tfds"
+TFDS_DATA_DIR = "/home/ubuntu/tfds"
 tf.config.optimizer.set_jit(True)
 
 os.environ["TORNET_ROOT"] = DATA_ROOT
 os.environ["TFDS_DATA_DIR"] = TFDS_DATA_DIR
+
+
+@keras.utils.register_keras_serializable()
+class SpatialAttention(keras.layers.Layer):
+    def __init__(self, kernel_size=7, **kwargs):
+        super(SpatialAttention, self).__init__(**kwargs)
+        self.kernel_size = kernel_size
+        # Define the Conv2D layer outside of call to avoid re-creating it on every call
+        self.conv = keras.layers.Conv2D(
+            1,
+            kernel_size=self.kernel_size,
+            strides=1,
+            padding="same",
+            activation="sigmoid",
+        )
+
+    def call(self, x):
+        # Perform average and max pooling along the channel axis
+        avg_pool = tf.reduce_mean(x, axis=-1, keepdims=True)  # Use tf.reduce_mean
+        max_pool = tf.reduce_max(x, axis=-1, keepdims=True)  # Use tf.reduce_max
+
+        # Concatenate the pooled results along the channel axis
+        concatenated = tf.concat([avg_pool, max_pool], axis=-1)  # Use tf.concat
+
+        # Apply the convolution to generate the spatial attention map
+        attention = self.conv(concatenated)
+
+        # Multiply the input with the attention map
+        return keras.layers.Multiply()([x, attention])
+
+
+@keras.utils.register_keras_serializable()
+class ChannelAttention(keras.layers.Layer):
+    def __init__(self, ratio=16, **kwargs):
+        super(ChannelAttention, self).__init__(**kwargs)
+        self.ratio = ratio
+        # Define the Dense layers to apply channel attention
+        self.dense1 = keras.layers.Dense(1, activation="sigmoid")
+
+    def call(self, x):
+        # Perform global average pooling to obtain channel-wise statistics
+        avg_pool = tf.reduce_mean(x, axis=[1, 2], keepdims=True)
+
+        # Apply the dense layer to create attention weights for each channel
+        attention = self.dense1(avg_pool)
+
+        # Multiply the input by the attention weights
+        return keras.layers.Multiply()([x, attention])
 
 
 @keras.utils.register_keras_serializable()
@@ -144,11 +190,12 @@ def main():
     )
 
     # Define metrics
-    from_logits = False
+    from_logits = True
     metrics = [
         keras.metrics.AUC(
             from_logits=from_logits, curve="PR", name="AUCPR", num_thresholds=2000
         ),
+        keras.metrics.AUC(from_logits=from_logits, name="AUC", num_thresholds=2000),
         tfm.BinaryAccuracy(from_logits, name="BinaryAccuracy"),
         tfm.TruePositives(from_logits, name="TruePositives"),
         tfm.FalsePositives(from_logits, name="FalsePositives"),
