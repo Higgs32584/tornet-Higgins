@@ -4,9 +4,9 @@ Software to work with the TorNet dataset as described in the paper [*A Benchmark
 
 ## Updates (7/9/24)
 
-* The TorNet dataset has been updated to version 1.1.  This update fixes a small number of incorrectly labeled frames in v1 of the dataset, and fixes the event and episode IDs of the warning categoies.   Version 1.1 also provides the tornado start and end times in the metadata.  We recommend re-downloading the newer version of the data using the links below. 
+* The TorNet dataset has been updated to version 1.1.  This update fixes a small number of incorrectly labeled frames in v1 of the dataset, and fixes the event and episode IDs of the warning categoies.   Version 1.1 also provides the tornado start and end times in the metadata.  We recommend re-downloading the newer version of the data using the links below.
 
-* The code and pretrained models are now compatible with `keras` 3.0.   Users can now select their deep learning backend from `tensorflow`, `torch`, or `jax`.  Backend-agnostic data loaders are also provided.  Read more about this library at [keras's website](https://keras.io/).  Users of `tf.keras` should use the `tf_keras` branch of this repo.  
+* The code and pretrained models are now compatible with `keras` 3.0.   Users can now select their deep learning backend from `tensorflow`, `torch`, or `jax`.  Backend-agnostic data loaders are also provided.  Read more about this library at [keras's website](https://keras.io/).  Users of `tf.keras` should use the `tf_keras` branch of this repo.
 
 * The pretrained CNN model is now available on [huggingface (tornet-ml/tornado_detector_baseline_v1)](https://huggingface.co/tornet-ml/tornado_detector_baseline_v1).   Instructions for downloading and using the pre-trained model can be found in `models/README.md` and in the `VisualizeSamples.ipynb` notebook.
 
@@ -21,7 +21,7 @@ The TorNet dataset can be downloaded from the following location:
 
 #### Zenodo
 
-TorNet is split across 10 files, each containing 1 year of data. There is also a catalog CSV file that is used by some functions in this repository.    
+TorNet is split across 10 files, each containing 1 year of data. There is also a catalog CSV file that is used by some functions in this repository.
 
 * Tornet 2013 (3 GB) and catalog: [https://doi.org/10.5281/zenodo.12636522](https://doi.org/10.5281/zenodo.12636522)
 * Tornet 2014 (15 GB): [https://doi.org/10.5281/zenodo.12637032](https://doi.org/10.5281/zenodo.12637032)
@@ -47,9 +47,9 @@ The `tornet` package can then installed into your environment by running
 
 `pip install .`
 
-In this repo.  To do ML with TorNet, additional installs may be necessary depending on library of choice.  See e.g., `requirements/tensorflow.txt`, `requirements/torch.txt` and/or `requirements/jax.txt`.  
+In this repo.  To do ML with TorNet, additional installs may be necessary depending on library of choice.  See e.g., `requirements/tensorflow.txt`, `requirements/torch.txt` and/or `requirements/jax.txt`.
 
-Please note that we did not exhaustively test all combinations of operating systems, data loaders, deep learning frameworks, and GPU usage.  If you are using the latest version of `keras`, then I recommend you follow setup instructions on the keras webpage [https://keras.io/getting_started/](https://keras.io/getting_started/).  Feel free to describe any issues you are having under the issues tab.  
+Please note that we did not exhaustively test all combinations of operating systems, data loaders, deep learning frameworks, and GPU usage.  If you are using the latest version of `keras`, then I recommend you follow setup instructions on the keras webpage [https://keras.io/getting_started/](https://keras.io/getting_started/).  Feel free to describe any issues you are having under the issues tab.
 
 ### Conda
 
@@ -74,7 +74,7 @@ To run inference on TorNet samples using a pretrained model,  look at `notebooks
 
 ### Multiple backend support with Keras 3
 The model uses Keras 3 which supports multiple backends. The environment variable
-KERAS_BACKEND can be used to choose the backend. 
+KERAS_BACKEND can be used to choose the backend.
 
 ```
 export KERAS_BACKEND=tensorflow
@@ -85,7 +85,7 @@ export KERAS_BACKEND=tensorflow
 The following trains the CNN baseline model described in the paper using `tensorflow`.  If you run this out-of-the-box, it will run very slowly because it uses the basic dataloader.  Read the DataLoader notebook for tips on how to optimize the data loader.
 ```
 # Set path to dataset
-export TORNET_ROOT=/path/to/tornet     
+export TORNET_ROOT=/path/to/tornet
 
 # Run training
 python scripts/tornado_detection/train_tornado_keras.py scripts/tornado_detection/config/params.json
@@ -96,10 +96,10 @@ To evaluate this model on the test set, run
 
 ```
 # Set path to dataset
-export TORNET_ROOT=/path/to/tornet  
+export TORNET_ROOT=/path/to/tornet
 
 # Evaluate trained model
-python scripts/tornado_detection/test_tornado_keras.py 
+python scripts/tornado_detection/test_tornado_keras.py
 ```
 
 This will compute and print various metrics computed on the test set.  Note that this script will attempt to download pretrained weights from huggingface, so ensure there is internet connectivity.  Alternatively, manually download the pretrained yourself and provide with `--model_path`
