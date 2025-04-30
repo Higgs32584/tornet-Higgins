@@ -7,8 +7,8 @@ This contribution extends the [Tornet benchmark](https://github.com/mit-ll/torne
 ## 📌 Overview
 
 This project:
-- Develops multiple ResNet-style neural network variants optimized for the Tornet dataset.
-- Uses **Precision-Recall AUC** and **Threat Score** as primary metrics to evaluate model performance
+- Developed two ResNet-style neural network variants optimized for the Tornet dataset.
+- Uses **Precision-Recall AUC** and **Threat Score** as primary metrics to evaluate model performance, albeit **AUC** is still accounted for
 - Introduces a streamlined **ensemble** of Wide ResNet variants that improves robustness and precision across tornado strength levels.
 
 ---
@@ -42,15 +42,6 @@ This project:
 | gated         | 0.5353    | 514905           | 0.8862| 0.5574 | 0.9436         | **976**        | 761            | 28715          | **1015**       | 0.5619    | **0.4902** | 0.0258     | 0.5236| 0.3547       | 0.6031     |
 | wide+gated      | 0.4898    | 744664           | **0.8928**| **0.5705** | **0.9474** | 975 | 640 | 28836 | 1016 | **0.6037** | 0.4897 | **0.0217** | **0.5408** | **0.3706** | **0.6685** |
 
-### 📈 Cross Valdiation AUC (taken on best run of AUCPR)
-
-|         | fold 1 | fold 2 | fold 3 | fold 4 | fold 5 | Average |
-|---------|--------|--------|--------|--------|--------|---------|
-| baseline| **0.895**  | 0.8744 | 0.872  | 0.8602 | 0.8708 | 0.87448 |
-| wide      | 0.892  | 0.8697 | **0.8824** | **0.8914** | **0.9077** | **0.88864** |
-| gated      | 0.8893 | **0.8749** | 0.8694 | 0.8877 | 0.8927 | 0.8828  |
-
-
 ### 📈 Cross Valdiation AUCPR
 
 | Name     | fold 1 | fold 2 | fold 3 | fold 4 | fold 5 | Average |
@@ -60,6 +51,13 @@ This project:
 | gated       | **0.6401** | 0.5516 | 0.5247 | 0.5878 | 0.5716 | 0.57516 |
 
 
+### 📈 Cross Valdiation AUC (taken on best run of AUCPR)
+
+|         | fold 1 | fold 2 | fold 3 | fold 4 | fold 5 | Average |
+|---------|--------|--------|--------|--------|--------|---------|
+| baseline| **0.895**  | 0.8744 | 0.872  | 0.8602 | 0.8708 | 0.87448 |
+| wide      | 0.892  | 0.8697 | **0.8824** | **0.8914** | **0.9077** | **0.88864** |
+| gated      | 0.8893 | **0.8749** | 0.8694 | 0.8877 | 0.8927 | 0.8828  |
 
 
 **Key Points:**
@@ -70,6 +68,9 @@ This project:
 
 
 Ensemble models consistently outperform the [baseline](https://huggingface.co/tornet-ml/tornado_detector_baseline_v1) on all major metrics.
+
+Both Wide Resnet and the Gated Models are available [here](https://huggingface.co/Higgs32/tornet-ml-higgins)
+
 
 ---
 
