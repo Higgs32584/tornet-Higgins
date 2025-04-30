@@ -14,15 +14,17 @@ This project:
 ---
 
 ## 🧠 Key Contributions
+tornet_baseline was 18.8 MB
+
 
 ### ✅ Version 5 – Lightweight Wide ResNet
-- ~230k parameters.
+- 2.91 MB
 - Excellent performance-to-size ratio.
 - Tuned with Binary Cross-Entropy + Adam + Exponential Decay.
 - Utilizes Wide Resnet implementation for more dynamic and lightweight prediction
 
 ### ✅ Version 6 – Gated Wide ResNet
-- ~514k parameters.
+- 6.44 MB parameters.
 - Dynamically blends shallow vs. deep inference paths for "easy" and "hard" tornado cases.
 - Introduces learned gating for adaptive computation.
 
