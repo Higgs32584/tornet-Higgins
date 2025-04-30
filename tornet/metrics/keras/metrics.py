@@ -19,40 +19,41 @@ taken from https://github.com/tensorflow/tensorflow/issues/42182
 import keras
 from keras import ops
 
+
 class FromLogitsMixin:
-  def __init__(self, from_logits=True, *args, **kwargs):
-    super().__init__(*args, **kwargs)
-    self.from_logits = from_logits
+    def __init__(self, from_logits=True, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.from_logits = from_logits
 
-  def update_state(self, y_true, y_pred, sample_weight=None):
-    if self.from_logits:
-      y_pred = ops.sigmoid(y_pred)
-    return super().update_state(y_true, y_pred, sample_weight)
+    def update_state(self, y_true, y_pred, sample_weight=None):
+        if self.from_logits:
+            y_pred = ops.sigmoid(y_pred)
+        return super().update_state(y_true, y_pred, sample_weight)
 
 
-class AUC(FromLogitsMixin, keras.metrics.AUC):
-  ...
+class AUC(FromLogitsMixin, keras.metrics.AUC): ...
 
-class BinaryAccuracy(FromLogitsMixin, keras.metrics.BinaryAccuracy):
-  ...
 
-class TruePositives(FromLogitsMixin, keras.metrics.TruePositives):
-  ...
+class BinaryAccuracy(FromLogitsMixin, keras.metrics.BinaryAccuracy): ...
 
-class FalsePositives(FromLogitsMixin, keras.metrics.FalsePositives):
-  ...
 
-class TrueNegatives(FromLogitsMixin, keras.metrics.TrueNegatives):
-  ...
+class TruePositives(FromLogitsMixin, keras.metrics.TruePositives): ...
 
-class FalseNegatives(FromLogitsMixin, keras.metrics.FalseNegatives):
-  ...
 
-class Precision(FromLogitsMixin, keras.metrics.Precision):
-  ...
+class FalsePositives(FromLogitsMixin, keras.metrics.FalsePositives): ...
 
-class Recall(FromLogitsMixin, keras.metrics.Recall):
-  ...
+
+class TrueNegatives(FromLogitsMixin, keras.metrics.TrueNegatives): ...
+
+
+class FalseNegatives(FromLogitsMixin, keras.metrics.FalseNegatives): ...
+
+
+class Precision(FromLogitsMixin, keras.metrics.Precision): ...
+
+
+class Recall(FromLogitsMixin, keras.metrics.Recall): ...
+
 
 class F1Score(keras.metrics.Metric):
     def __init__(self, name="f1", from_logits=False, **kwargs):

@@ -14,23 +14,24 @@ Delivered to the U.S. Government with Unlimited Rights, as defined in DFARS Part
 import keras
 from keras import ops
 
+
 def _prep(class_labels, logits):
     y_true = ops.cast(class_labels, dtype=logits.dtype)
-    y_pred = ops.sigmoid(logits) # p=1 means class label=1
-    return y_true,y_pred
+    y_pred = ops.sigmoid(logits)  # p=1 means class label=1
+    return y_true, y_pred
 
 
-def mae_loss( class_labels, logits, sample_weights=None ):
+def mae_loss(class_labels, logits, sample_weights=None):
     """
     class_labels represents tensor of known binary classes (1,0)
     logits are output of final classification layer that has not yet been run through a sigmoid (from_logits)
     """
-    y_true,y_pred=_prep(class_labels, logits)
+    y_true, y_pred = _prep(class_labels, logits)
     if sample_weights is not None:
-        denom=ops.sum(sample_weights)
-        return ops.sum( sample_weights*ops.absolute(y_true-y_pred) ) / denom
+        denom = ops.sum(sample_weights)
+        return ops.sum(sample_weights * ops.absolute(y_true - y_pred)) / denom
     else:
-        return ops.mean( ops.absolute(y_true-y_pred) )
+        return ops.mean(ops.absolute(y_true - y_pred))
 
 
 def jaccard_loss(class_labels, logits):
@@ -38,11 +39,13 @@ def jaccard_loss(class_labels, logits):
     class_labels represents tensor of known binary classes (1,0)
     logits are output of final classification layer that has not yet been run through a sigmoid (from_logits)
     """
-    y_true,y_pred=_prep(class_labels, logits)
+    y_true, y_pred = _prep(class_labels, logits)
     intersection = y_true * y_pred
     union = y_true + y_pred - intersection
     # Calculate the Jaccard similarity coefficient (IoU)
-    iou = intersection / (union + keras.config.epsilon())  # Adding a small epsilon to prevent division by zero
+    iou = intersection / (
+        union + keras.config.epsilon()
+    )  # Adding a small epsilon to prevent division by zero
     # Jaccard loss is the complement of the Jaccard similarity
     return ops.mean(1 - iou)
 
@@ -51,10 +54,10 @@ def dice_loss(class_labels, logits):
     """
     y_true:   [Batch, 1]
     y_pred:   [Batch, 1]
-    
+
     """
-    y_true,y_pred=_prep(class_labels, logits)
+    y_true, y_pred = _prep(class_labels, logits)
     intersection = y_true * y_pred
     union = y_true + y_pred
     dice = (2.0 * intersection + 1e-7) / (union + 1e-7)
-    return ops.mean(1.0-dice)
+    return ops.mean(1.0 - dice)
