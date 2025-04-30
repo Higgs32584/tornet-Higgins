@@ -1,93 +1,85 @@
-# TorNet
+# 🌀 Tornado Prediction with Wide ResNet Ensembles
 
-Software to work with the TorNet dataset as described in the paper [*A Benchmark Dataset for Tornado Detection and Prediction using Full-Resolution Polarimetric Weather Radar Data*](https://arxiv.org/abs/2401.16437)
+This contribution extends the [Tornet benchmark](https://github.com/mit-ll/tornet) with optimized deep learning architectures for tornado detection using polarimetric radar data. The focus is on enhancing performance via model refinement and ensembling, culminating in a lightweight and high-performing prediction pipeline.
 
-## Updates (7/9/24)
+---
 
-* The TorNet dataset has been updated to version 1.1.  This update fixes a small number of incorrectly labeled frames in v1 of the dataset, and fixes the event and episode IDs of the warning categoies.   Version 1.1 also provides the tornado start and end times in the metadata.  We recommend re-downloading the newer version of the data using the links below.
+## 📌 Overview
 
-* The code and pretrained models are now compatible with `keras` 3.0.   Users can now select their deep learning backend from `tensorflow`, `torch`, or `jax`.  Backend-agnostic data loaders are also provided.  Read more about this library at [keras's website](https://keras.io/).  Users of `tf.keras` should use the `tf_keras` branch of this repo.
+This project:
+- Develops multiple ResNet-style neural network variants optimized for the Tornet dataset.
+- Integrates **CoordConv2D** to improve spatial awareness in convolutional layers.
+- Uses **Precision-Recall AUC** and **Threat Score** as primary metrics to evaluate model performance, particularly for imbalanced classes.
+- Introduces a streamlined **ensemble** of Wide ResNet variants that improves robustness and precision across tornado strength levels.
 
-* The pretrained CNN model is now available on [huggingface (Higgs32/tornet-ml-higgins)](https://huggingface.co/Higgs32/tornet-ml-higgins).   Instructions for downloading and using the pre-trained model can be found in `models/README.md` and in the `VisualizeSamples.ipynb` notebook.
+---
 
+## 🧠 Key Contributions
 
-![Alt text](tornet_image.png?raw=true "sample")
+### ✅ Version 5 – Lightweight Wide ResNet
+- ~230k parameters.
+- Excellent performance-to-size ratio.
+- Pre-activation block design with dropout and early normalization.
+- Tuned with Binary Cross-Entropy + Adam + Exponential Decay.
 
+### ✅ Version 6 – Gated Wide ResNet
+- ~514k parameters.
+- Dynamically blends shallow vs. deep inference paths for "easy" and "hard" tornado cases.
+- Introduces learned gating for adaptive computation.
 
+### 🔀 Ensemble (v5 + v6)
+- Simple average ensemble of model outputs.
+- Achieves a **7-point PR-AUC increase** over the baseline.
+- Provides robustness across EF0 to EF2+ tornadoes, reducing false alarms while preserving sensitivity.
 
-## Downloading the Data
+---
 
-The TorNet dataset can be downloaded from the following location:
+## 📊 Evaluation Metrics
 
-#### Zenodo
+| Metric         | Description                                                 |
+|----------------|-------------------------------------------------------------|
+| **PR-AUC**     | Threshold-independent evaluation for class imbalance        |
+| **F1 Score**   | Precision-recall tradeoff at a specific threshold           |
+| **Threat Score (CSI)** | Prioritizes correctness in severe event prediction      |
 
+Ensemble models consistently outperform the [baseline](https://huggingface.co/tornet-ml/tornado_detector_baseline_v1) on all major metrics.
 
+---
 
-## Setup
+## 📁 File Structure
 
-Basic python requirements are listed in `requirements/basic.txt`.
+- `scripts/tornado_detection/`
+  - `train_wide_resnet.py` – Training logic for WRN variants
+  - `train_gated_routing.py` – Model v6 with learned gate logic
+  - `test_tornado_keras_batch.py` – Batch evaluation and ensemble runner
+- `models/`
+  - Saved `.keras` models for versioned checkpoints
+- `visualizations/`
+  - Plots of AUCPR, precision-recall tradeoffs, and architecture comparisons
 
-The `tornet` package can then installed into your environment by running
+---
 
-`pip install .`
+## 📷 Sample Visualizations
 
-In this repo.  To do ML with TorNet, additional installs may be necessary depending on library of choice.  See e.g., `requirements/tensorflow.txt`, `requirements/torch.txt` and/or `requirements/jax.txt`.
+![AUCPR Over Epochs](docs/images/aucpr_over_epochs.png)
+*Figure: PR-AUC convergence of different model versions.*
 
-Please note that we did not exhaustively test all combinations of operating systems, data loaders, deep learning frameworks, and GPU usage.  If you are using the latest version of `keras`, then I recommend you follow setup instructions on the keras webpage [https://keras.io/getting_started/](https://keras.io/getting_started/).  Feel free to describe any issues you are having under the issues tab.
+![Model Architecture Comparison](docs/images/resnet_block_comparison.png)
+*Figure: Comparison of baseline vs. WRN (v5/v6) building blocks.*
 
-### Conda
+---
 
-If using conda
+## 🔬 Dependencies
 
-```
-conda create -n tornet-{backend} python=3.10
-conda activate tornet-{backend}
-pip install -r requirements/{backend}.txt
-```
+- Python 3.10+
+- TensorFlow 2.15+
+- Keras
+- TFDS (for Tornet dataset)
+- `matplotlib`, `scikit-learn`, `tqdm`, etc.
 
-Replace {backend} with tensorflow, torch or jax.
-
-
-## Loading and visualizing TorNet
-
-Start with `notebooks/DataLoaders.ipynb` to get an overview on loading and visualizing the dataset.
-
-To run inference on TorNet samples using a pretrained model,  look at `notebooks/VisualizeSamples.ipynb`.
-
-## Train CNN baseline model
-
-### Multiple backend support with Keras 3
-The model uses Keras 3 which supports multiple backends. The environment variable
-KERAS_BACKEND can be used to choose the backend.
-
-```
-export KERAS_BACKEND=tensorflow
-# export KERAS_BACKEND=torch
-# export KERAS_BACKEND=jax
-```
-
-The following trains the CNN baseline model described in the paper using `tensorflow`.  If you run this out-of-the-box, it will run very slowly because it uses the basic dataloader.  Read the DataLoader notebook for tips on how to optimize the data loader.
-```
-# Set path to dataset
-export TORNET_ROOT=/path/to/tornet
-
-# Run training
-python scripts/tornado_detection/train_tornado_keras.py scripts/tornado_detection/config/params.json
-```
-
-## Evaluate trained model
-To evaluate this model on the test set, run
-python "/scripts/tornado_detection/test_tornado_keras_batch.py" --model_paths MODEL_PATHS
-```
-# Set path to dataset
-export TORNET_ROOT=/path/to/tornet
-export TFDS_DIR=/path/to/tfds_dir
-
-# Evaluate trained model
-python scripts/tornado_detection/test_tornado_keras.py
-```
-
-This will compute and print various metrics computed on the test set.  Note that this script will attempt to download pretrained weights from huggingface, so ensure there is internet connectivity.  Alternatively, manually download the pretrained yourself and provide with `--model_path`
+Install dependencies:
+```bash
+pip install -r requirements.txt
 
 
 ### Disclosure
