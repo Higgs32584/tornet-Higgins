@@ -37,7 +37,7 @@ tornet_baseline was 18.8 MB
 ## 📊 Evaluation Metrics
 
 ### 📈 Model Comparison Table
-| Model Name | Threshold | Model parameters | AUC   | AUCPR | BinaryAccuracy | TruePositives | FalsePositives | TrueNegatives | FalseNegatives | Precision | Recall | FalseAlarmRate | F1    | ThreatScore | val AUCPR |
+| Model Name | Threshold | Model parameters | AUC   | AUCPR | BinaryAccuracy | TruePositives | FalsePositives | TrueNegatives | FalseNegatives | Precision | Recall | FalseAlarmRate | F1    | CSI | val AUCPR |
 |------------|-----------|------------------|-------|--------|----------------|----------------|----------------|----------------|----------------|-----------|--------|----------------|-------|--------------|------------|
 | baseline   | 0.0101    | 4665409          | 0.8742| 0.5349 | 0.9456         | 915            | **635**        | **28841**      | 1076           | 0.5903    | 0.4596 | 0.0215         | 0.5168| 0.3484       |            |
 | wide         | 0.4444    | 229759           | 0.8820| 0.5498 | 0.9456         | 973            | 693            | 28783          | 1018           | 0.5840    | 0.4887 | 0.0235         | 0.5321| 0.3625       | 0.5926     |
