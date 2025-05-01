@@ -115,8 +115,7 @@ python scripts/tornado_detection/test_tornado_keras_batch.py \
 
 ## Citation
 
-If you use this model or codebase in your work, please consider citing:
-
+If you use this repository, its models, or training scripts in any academic, commercial, or public work,**you must cite the following**:
 @misc{higgins2025tornet,
   author = {Michael Higgins},
   title = {Improved Tornado Detection with Wide ResNet on TorNet},
