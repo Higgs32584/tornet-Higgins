@@ -25,6 +25,8 @@ tornet_baseline was 18.8 MB
 
 ### ✅ Version 6 – Gated Wide ResNet
 - 6.44 MB
+- Tuned with Binary Cross-Entropy + Adam + Exponential Decay.
+
 - Dynamically blends shallow vs. deep inference paths for "easy" and "hard" tornado cases.
 - Introduces learned gating for adaptive computation.
 
