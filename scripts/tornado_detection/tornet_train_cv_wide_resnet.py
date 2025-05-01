@@ -247,7 +247,7 @@ DEFAULT_CONFIG = {
     "val_years": [2021, 2022],
     "batch_size": 128,
     "model": "wide_resnet",
-    "start_filters": 96,
+    "start_filters": 48,
     "learning_rate": 1e-4,
     "decay_steps": 1386,
     "decay_rate": 0.958,
