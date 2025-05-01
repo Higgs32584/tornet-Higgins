@@ -82,7 +82,12 @@ Both Wide Resnet and the Gated Models are available [here](https://huggingface.c
   - `train_wide_resnet.py` – Training logic for WRN variants
   - `train_gated_routing.py` – Model v6 with learned gate logic
   - `test_tornado_keras_batch.py` – Batch evaluation and ensemble runner
-- `models/`
+  `tornet_train_cv_gated.py` – Cross-Validation on training data for gated(AUCPR)
+  `tornet_train_cv_wide_resnet.py` – Cross-Validation on training for wide resnet(AUCPR)
+  `tornet_train_cv_baseline.py` – Cross-Validation on training for baseline(AUCPR)
+
+
+
   - Saved `.keras` models for versioned checkpoints
 - `visualizations/`
   - Plots of AUCPR, precision-recall tradeoffs, and architecture comparisons
