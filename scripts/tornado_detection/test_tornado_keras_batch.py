@@ -190,7 +190,7 @@ def main():
     )
 
     # Define metrics
-    from_logits = True
+    from_logits = False
     metrics = [
         keras.metrics.AUC(
             from_logits=from_logits, curve="PR", name="AUCPR", num_thresholds=2000
