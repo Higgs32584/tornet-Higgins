@@ -113,7 +113,16 @@ python scripts/tornado_detection/test_tornado_keras_batch.py \
 
 
 
+## Citation
 
+If you use this model or codebase in your work, please consider citing:
+
+@misc{higgins2025tornet,
+  author = {Michael Higgins},
+  title = {Improved Tornado Detection with Wide ResNet on TorNet},
+  year = {2025},
+  url = {https://github.com/Higgs32584/tornet-Higgins}
+}
 
 DISTRIBUTION STATEMENT A. Approved for public release. Distribution is unlimited.
 This material is based upon work supported by the Department of the Air Force under Air Force Contract No. FA8702-15-D-0001. Any opinions, findings, conclusions or recommendations expressed in this material are those of the author(s) and do not necessarily reflect the views of the Department of the Air Force.
