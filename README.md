@@ -80,20 +80,27 @@ Both Wide Resnet and the Gated Models are available [here](https://huggingface.c
 
 ## 📁 File Structure
 
-- `scripts/tornado_detection/`
-  - `train_wide_resnet.py` – Training logic for WRN variants
-  - `train_gated_routing.py` – Model v6 with learned gate logic
-  - `test_tornado_keras_batch.py` – Batch evaluation and ensemble runner
-  `tornet_train_cv_gated.py` – Cross-Validation on training data for gated(AUCPR)
-  `tornet_train_cv_wide_resnet.py` – Cross-Validation on training for wide resnet(AUCPR)
-  `tornet_train_cv_baseline.py` – Cross-Validation on training for baseline(AUCPR)
+### `scripts/tornado_detection/`
+- `train_wide_resnet.py` – Training logic for Wide ResNet (WRN) variants  
+- `train_gated_routing.py` – Training logic for Model v6 with learned gating mechanism  
+- `test_tornado_keras_batch.py` – Batch evaluation and ensemble inference script  
+- `tornet_train_cv_gated.py` – Cross-validation for gated model (AUCPR metric)  
+- `tornet_train_cv_wide_resnet.py` – Cross-validation for Wide ResNet model (AUCPR)  
+- `tornet_train_cv_baseline.py` – Cross-validation for baseline model (AUCPR)  
+- Saved `.keras` models – Versioned model checkpoints  
 
+### `visualizations/`
+- Plots showing AUCPR performance, precision-recall tradeoffs, and model architecture comparisons  
 
+---
 
-  - Saved `.keras` models for versioned checkpoints
-- `visualizations/`
-  - Plots of AUCPR, precision-recall tradeoffs, and architecture comparisons
+## 🧪 Ensemble Evaluation Usage
 
+```bash
+python scripts/tornado_detection/test_tornado_keras_batch.py \
+  --model_paths MULTIPLE_MODEL_PATHS \
+  --threshold THRESHOLD
+```
 ---
 
 ## 📷 Sample Visualizations
