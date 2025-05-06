@@ -130,7 +130,7 @@ If you use this repository, its models, or training scripts in any academic, com
 ```
 MIT License
 
-Copyright (c) 2024 Massachusetts Institute of Technology
+Copyright (c) 2025 Massachusetts Institute of Technology
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
