@@ -102,32 +102,7 @@ python scripts/tornado_detection/test_tornado_keras_batch.py \
   --threshold THRESHOLD
 ```
 ---
-## Downloading the Data(same as [Tornet benchmark](https://github.com/mit-ll/tornet))
-The TorNet dataset can be downloaded from the following location:
-
-Zenodo
-TorNet is split across 10 files, each containing 1 year of data. There is also a catalog CSV file that is used by some functions in this repository.
-
-Tornet 2013 (3 GB) and catalog: https://doi.org/10.5281/zenodo.12636522
-Tornet 2014 (15 GB): https://doi.org/10.5281/zenodo.12637032
-Tornet 2015 (17 GB): https://doi.org/10.5281/zenodo.12655151
-Tornet 2016 (16 GB): https://doi.org/10.5281/zenodo.12655179
-Tornet 2017 (15 GB): https://doi.org/10.5281/zenodo.12655183
-Tornet 2018 (12 GB): https://doi.org/10.5281/zenodo.12655187
-Tornet 2019 (18 GB): https://doi.org/10.5281/zenodo.12655716
-Tornet 2020 (17 GB): https://doi.org/10.5281/zenodo.12655717
-Tornet 2021 (18 GB): https://doi.org/10.5281/zenodo.12655718
-Tornet 2022 (19 GB): https://doi.org/10.5281/zenodo.12655719
-If downloading through your browser is slow, we recommend downloading these using zenodo_get (https://gitlab.com/dvolgyes/zenodo_get).
-
-After downloading, there should be 11 files, catalog.csv, and 10 files named as tornet_YYYY.tar.gz. Move and untar these into a target directory, which will be referenced using the TORNET_ROOT environment variable in the code. After untarring the 10 files, this directory should contain catalog.csv along with sub-directories train/ and test/ filled with .nc files for each year in the dataset.
-
-Setup
-Basic python requirements are listed in requirements/basic.txt.
-
-The tornet package can then installed into your environment by running
-
-pip install .
+## Downloading the Data and set up is the same as [Tornet benchmark](https://github.com/mit-ll/tornet)
 
 ## 📷 Sample Visualizations
 
