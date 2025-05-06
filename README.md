@@ -105,6 +105,11 @@ python scripts/tornado_detection/test_tornado_keras_batch.py \
 ## Downloading the Data and set up is the same as [Tornet benchmark](https://github.com/mit-ll/tornet)
 
 ## 📷 Sample Visualizations
+![Precision Recall Curve](image.png)
+
+*tornado_detector_baseline_v1 vs tornadoDetector_v5(wide resnet) and tornadoDetector_v6(gated mechanism)*
+
+
 
 ![Wide Resnet Implementation](wide_resnet.png)
 *Structure of Wide Resnet Implementation*
@@ -115,7 +120,7 @@ python scripts/tornado_detection/test_tornado_keras_batch.py \
 
 
 ## Citation
-
+```
 If you use this repository, its models, or training scripts in any academic, commercial, or public work,**you must cite the following**:
 @misc{higgins2025tornet,
   author = {Michael Higgins},
@@ -123,7 +128,7 @@ If you use this repository, its models, or training scripts in any academic, com
   year = {2025},
   url = {https://github.com/Higgs32584/tornet-Higgins}
 }
-
+```
 ## DISTRIBUTION STATEMENT 
 
 ### Disclosure
