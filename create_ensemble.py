@@ -1,7 +1,9 @@
-from tensorflow.keras.layers import Average
-from tensorflow.keras.models import Model
 import tensorflow as tf
 from tensorflow import keras
+from tensorflow.keras.layers import Average
+from tensorflow.keras.models import Model
+
+
 @keras.utils.register_keras_serializable()
 class FillNaNs(keras.layers.Layer):
     def __init__(self, fill_val, **kwargs):
@@ -27,12 +29,17 @@ class StackAvgMax(tf.keras.layers.Layer):
     def call(self, inputs):
         return tf.stack(inputs, axis=1)
 
+
 @keras.utils.register_keras_serializable()
 class FastNormalize(tf.keras.layers.Layer):
     def __init__(self, mean, std, **kwargs):
         super().__init__(**kwargs)
-        self._mean_list = [float(v) for v in mean.numpy()] if hasattr(mean, 'numpy') else list(mean)
-        self._std_list = [float(v) for v in std.numpy()] if hasattr(std, 'numpy') else list(std)
+        self._mean_list = (
+            [float(v) for v in mean.numpy()] if hasattr(mean, "numpy") else list(mean)
+        )
+        self._std_list = (
+            [float(v) for v in std.numpy()] if hasattr(std, "numpy") else list(std)
+        )
         self.mean = tf.constant(self._mean_list, dtype=tf.float32)
         self.std = tf.constant(self._std_list, dtype=tf.float32)
 
@@ -40,16 +47,20 @@ class FastNormalize(tf.keras.layers.Layer):
         return (x - self.mean) / (self.std + 1e-6)
 
     def get_config(self):
-        return {
-            **super().get_config(),
-            "mean": self._mean_list,
-            "std": self._std_list
-        }
+        return {**super().get_config(), "mean": self._mean_list, "std": self._std_list}
+
+
 print("load model 1")
-model1 = keras.models.load_model("/home/ubuntu/tornet-Higgins/best_models_so_far/tornadoDetector_v5.keras", compile=False)
+model1 = keras.models.load_model(
+    "/home/ubuntu/tornet-Higgins/best_models_so_far/tornadoDetector_v5.keras",
+    compile=False,
+)
 print("loaded model 1")
 print("load model 2")
-model2 = keras.models.load_model("/home/ubuntu/tornet-Higgins/best_models_so_far/tornadoDetector_v6.keras", compile=False)
+model2 = keras.models.load_model(
+    "/home/ubuntu/tornet-Higgins/best_models_so_far/tornadoDetector_v6.keras",
+    compile=False,
+)
 print("loaded model 2")
 
 # Assuming both models share the same input

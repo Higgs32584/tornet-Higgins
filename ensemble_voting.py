@@ -1,26 +1,32 @@
-import os
-import json
 import argparse
+import json
 import logging
+import os
+
 import numpy as np
 import tensorflow as tf
-from tensorflow import keras
 import tensorflow_datasets as tfds
 from sklearn.metrics import (
-    precision_score, recall_score, f1_score,
-    average_precision_score, accuracy_score
+    accuracy_score,
+    average_precision_score,
+    f1_score,
+    precision_score,
+    recall_score,
 )
-from tornet.data.loader import get_dataloader
+from tensorflow import keras
+
 import tornet.data.tfds.tornet.tornet_dataset_builder
+from tornet.data.loader import get_dataloader
 
 logging.basicConfig(level=logging.INFO)
 
 # Constants
-DATA_ROOT = '/home/ubuntu/tfds'
+DATA_ROOT = "/home/ubuntu/tfds"
 TORNET_ROOT = DATA_ROOT
 TFDS_DATA_DIR = DATA_ROOT
-os.environ['TORNET_ROOT'] = DATA_ROOT
-os.environ['TFDS_DATA_DIR'] = TFDS_DATA_DIR
+os.environ["TORNET_ROOT"] = DATA_ROOT
+os.environ["TFDS_DATA_DIR"] = TFDS_DATA_DIR
+
 
 def soft_voting_ensemble(models, dataset):
     y_trues, y_preds_all = [], []
@@ -39,6 +45,7 @@ def soft_voting_ensemble(models, dataset):
     y_pred_all = np.concatenate(y_preds_all)
     return y_true_all, y_pred_all
 
+
 def evaluate(y_true, y_pred):
     binary_preds = (y_pred > 0.5).astype(int)
 
@@ -47,13 +54,18 @@ def evaluate(y_true, y_pred):
         "Accuracy": accuracy_score(y_true, binary_preds),
         "Precision": precision_score(y_true, binary_preds),
         "Recall": recall_score(y_true, binary_preds),
-        "F1": f1_score(y_true, binary_preds)
+        "F1": f1_score(y_true, binary_preds),
     }
+
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_paths", nargs="+", required=True,
-                        help="List of pretrained .keras model paths")
+    parser.add_argument(
+        "--model_paths",
+        nargs="+",
+        required=True,
+        help="List of pretrained .keras model paths",
+    )
     parser.add_argument("--batch_size", type=int, default=128)
     args = parser.parse_args()
 
@@ -66,8 +78,14 @@ def main():
 
     # Load dataset
     test_years = list(range(2013, 2023))
-    ds_test = get_dataloader("tensorflow-tfds", DATA_ROOT, test_years, "test", args.batch_size,
-                             select_keys=input_keys)
+    ds_test = get_dataloader(
+        "tensorflow-tfds",
+        DATA_ROOT,
+        test_years,
+        "test",
+        args.batch_size,
+        select_keys=input_keys,
+    )
 
     # Run ensemble predictions
     y_true, y_pred = soft_voting_ensemble(models, ds_test)
@@ -77,6 +95,7 @@ def main():
     logging.info("Ensemble Evaluation Results:")
     for k, v in results.items():
         print(f"{k}: {v:.4f}")
+
 
 if __name__ == "__main__":
     main()

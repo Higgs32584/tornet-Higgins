@@ -1,8 +1,10 @@
-import optuna
-import os
 import json
+import os
 from datetime import datetime
+
+import optuna
 import tensorflow as tf
+
 from train_5926 import main  # Assumes your main training function is here
 
 DEFAULT_CONFIG = {
@@ -31,10 +33,16 @@ DEFAULT_CONFIG = {
     "dataloader": "tensorflow-tfds",
     "dataloader_kwargs": {
         "select_keys": [
-            "DBZ", "VEL", "KDP", "RHOHV", "ZDR", "WIDTH",
-            "range_folded_mask", "coordinates"
+            "DBZ",
+            "VEL",
+            "KDP",
+            "RHOHV",
+            "ZDR",
+            "WIDTH",
+            "range_folded_mask",
+            "coordinates",
         ]
-    }
+    },
 }
 
 # --- Logging directory setup ---
@@ -46,11 +54,7 @@ TRIAL_LOG_PATH = os.path.join(STUDY_DIR, "trials.json")
 
 
 def log_trial_result(trial_number, params, value):
-    result = {
-        "trial_number": trial_number,
-        "params": params,
-        "value": value
-    }
+    result = {"trial_number": trial_number, "params": params, "value": value}
     if os.path.exists(TRIAL_LOG_PATH):
         with open(TRIAL_LOG_PATH, "r") as f:
             data = json.load(f)
@@ -63,20 +67,24 @@ def log_trial_result(trial_number, params, value):
 
 def objective(trial):
     config = DEFAULT_CONFIG.copy()
-    config.update({
-        "learning_rate": trial.suggest_float("learning_rate", 1e-5, 5e-4, log=True),
-        "l2_reg": trial.suggest_float("l2_reg", 1e-8, 1e-3, log=True),
-        "dropout_rate": trial.suggest_float("dropout_rate", 0.05, 0.4),
-        "start_filters": trial.suggest_categorical("start_filters", [16, 32, 48, 64]),
-        "nconvs": trial.suggest_int("nconvs", 1, 3),
-        "decay_steps": trial.suggest_int("decay_steps", 1000, 4000),
-        "decay_rate": trial.suggest_float("decay_rate", 0.9, 0.99),
-        "wN": trial.suggest_float("wN", 0.01, 1.0),
-        "w0": trial.suggest_float("w0", 0.1, 2.0),
-        "w1": trial.suggest_float("w1", 0.5, 5.0),
-        "w2": trial.suggest_float("w2", 1.0, 15.0),
-        "wW": trial.suggest_float("wW", 0.1, 1.0),
-    })
+    config.update(
+        {
+            "learning_rate": trial.suggest_float("learning_rate", 1e-5, 5e-4, log=True),
+            "l2_reg": trial.suggest_float("l2_reg", 1e-8, 1e-3, log=True),
+            "dropout_rate": trial.suggest_float("dropout_rate", 0.05, 0.4),
+            "start_filters": trial.suggest_categorical(
+                "start_filters", [16, 32, 48, 64]
+            ),
+            "nconvs": trial.suggest_int("nconvs", 1, 3),
+            "decay_steps": trial.suggest_int("decay_steps", 1000, 4000),
+            "decay_rate": trial.suggest_float("decay_rate", 0.9, 0.99),
+            "wN": trial.suggest_float("wN", 0.01, 1.0),
+            "w0": trial.suggest_float("w0", 0.1, 2.0),
+            "w1": trial.suggest_float("w1", 0.5, 5.0),
+            "w2": trial.suggest_float("w2", 1.0, 15.0),
+            "wW": trial.suggest_float("wW", 0.1, 1.0),
+        }
+    )
 
     try:
         results = main(config)

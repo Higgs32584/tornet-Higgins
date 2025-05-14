@@ -1,12 +1,14 @@
-import os
 import argparse
 import logging
+import os
+
+import keras
 import numpy as np
 import tensorflow as tf
-import keras
-from tornet.data.loader import get_dataloader
 import tensorflow_datasets as tfds
+
 import tornet.data.tfds.tornet.tornet_dataset_builder
+from tornet.data.loader import get_dataloader
 
 logging.basicConfig(level=logging.INFO)
 

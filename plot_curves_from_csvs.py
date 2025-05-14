@@ -1,13 +1,20 @@
 # plot_pr_curves_from_csvs.py
-import os
 import argparse
+import os
+
 import matplotlib.pyplot as plt
-import pandas as pd
 import numpy as np
+import pandas as pd
+
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--csv_dir", type=str, default="pr_curves/", help="Directory containing PR curve CSVs")
+    parser.add_argument(
+        "--csv_dir",
+        type=str,
+        default="pr_curves/",
+        help="Directory containing PR curve CSVs",
+    )
     args = parser.parse_args()
 
     plt.figure(figsize=(10, 7))
@@ -31,6 +38,7 @@ def main():
     plt.grid(True)
     plt.tight_layout()
     plt.savefig("TEST_AUC_PR_curves.png")
+
 
 if __name__ == "__main__":
     main()

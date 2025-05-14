@@ -17,23 +17,28 @@ Custom layers for tornado detection
 import keras
 from keras import ops
 
+
 @keras.saving.register_keras_serializable()
 class CoordConv2D(keras.layers.Layer):
     """
-    Adopted from the CoodConv2d layers as described in 
+    Adopted from the CoodConv2d layers as described in
 
-    Liu, Rosanne, et al. "An intriguing failing of convolutional neural networks and 
+    Liu, Rosanne, et al. "An intriguing failing of convolutional neural networks and
     the coordconv solution." Advances in neural information processing systems 31 (2018).
-    
+
     """
-    def __init__(self,filters,
-                      kernel_size,
-                      kernel_regularizer,
-                      activation,
-                      padding='same',
-                      strides=(1,1),
-                      conv2d_kwargs = {},
-                      **kwargs):
+
+    def __init__(
+        self,
+        filters,
+        kernel_size,
+        kernel_regularizer,
+        activation,
+        padding="same",
+        strides=(1, 1),
+        conv2d_kwargs={},
+        **kwargs
+    ):
 
         super(CoordConv2D, self).__init__(**kwargs)
 
@@ -64,53 +69,56 @@ class CoordConv2D(keras.layers.Layer):
         concat_shape[-1] += coord_shape[-1]
         self.conv.build(concat_shape)
 
-    def call(self,inputs):
+    def call(self, inputs):
         """
-        inputs is a tuple 
+        inputs is a tuple
            [N, L, W, C] data tensor,
            [N, L, W, nd] tensor of coordiantes
         """
         x, coords = inputs
 
         # Stack x with coordinates
-        x = ops.concatenate( (x,coords), axis=-1)
+        x = ops.concatenate((x, coords), axis=-1)
 
         # Run convolution
-        conv=self.conv(x)
+        conv = self.conv(x)
 
         # The returned coordinates should have same shape as conv
         # prep the coordiantes by slicing them to the same shape
         # as conv
-        if self.padding=='same' and self.strd>1:
-            coords = coords[:,::self.strd,::self.strd]
-        elif self.padding=='valid':
+        if self.padding == "same" and self.strd > 1:
+            coords = coords[:, :: self.strd, :: self.strd]
+        elif self.padding == "valid":
             # If valid padding,  need to start slightly off the corner
-            i0 = self.kernel_size[0]//2
-            if i0>0:
-                coords = coords[:,i0:-i0:self.strd,i0:-i0:self.strd]
+            i0 = self.kernel_size[0] // 2
+            if i0 > 0:
+                coords = coords[:, i0 : -i0 : self.strd, i0 : -i0 : self.strd]
             else:
-                coords = coords[:,::self.strd,::self.strd]
+                coords = coords[:, :: self.strd, :: self.strd]
 
-        return conv,coords
+        return conv, coords
 
     def get_config(self):
         """Get model configuration, used for saving model."""
         config = super().get_config()
         config.update(
-            {   "filters": self.filters,
+            {
+                "filters": self.filters,
                 "kernel_size": self.kernel_size,
                 "kernel_regularizer": self.kernel_regularizer,
-                "activation":self.activation,
+                "activation": self.activation,
                 "padding": self.padding,
                 "strides": self.strides,
-                "conv2d_kwargs": self.conv2d_kwargs
+                "conv2d_kwargs": self.conv2d_kwargs,
             }
         )
         return config
 
+
 @keras.saving.register_keras_serializable()
 class FillNaNs(keras.layers.Layer):
     """Fill NaNs with fill_val"""
+
     def __init__(self, fill_val, **kwargs):
         super(FillNaNs, self).__init__(**kwargs)
         self.fill_val = fill_val

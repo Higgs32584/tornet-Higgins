@@ -10,24 +10,26 @@ The software/firmware is provided to you on an As-Is basis
 Delivered to the U.S. Government with Unlimited Rights, as defined in DFARS Part 252.227-7013 or 7014 (Feb 2014). Notwithstanding any copyright notice, U.S. Government rights in this work are defined by DFARS 252.227-7013 or DFARS 252.227-7014 as detailed above. Use of this work other than as specifically authorized by the U.S. Government may violate any copyrights that exist in this work.
 """
 
-import os
 import argparse
 import logging
+import os
+
+import keras
 import numpy as np
 import tensorflow as tf
-import keras
+import tensorflow_datasets as tfds
+
+import tornet.data.tfds.tornet.tornet_dataset_builder  # registers 'tornet'
 from tornet.data.loader import get_dataloader
 from tornet.metrics.keras import metrics as tfm
-
-import tensorflow_datasets as tfds
-import tornet.data.tfds.tornet.tornet_dataset_builder  # registers 'tornet'
 
 logging.basicConfig(level=logging.INFO)
 
 # Hardcoded for TornadoNet setup
 DATA_ROOT = "/home/ubuntu/tfds"
-os.environ['TFDS_DATA_DIR'] = DATA_ROOT
-os.environ['TORNET_ROOT'] = DATA_ROOT
+os.environ["TFDS_DATA_DIR"] = DATA_ROOT
+os.environ["TORNET_ROOT"] = DATA_ROOT
+
 
 # Custom metric definitions
 class FalseAlarmRate(tf.keras.metrics.Metric):
@@ -46,11 +48,14 @@ class FalseAlarmRate(tf.keras.metrics.Metric):
         self.true_positives.assign_add(tp)
 
     def result(self):
-        return self.false_positives / (self.false_positives + self.true_positives + self.epsilon)
+        return self.false_positives / (
+            self.false_positives + self.true_positives + self.epsilon
+        )
 
     def reset_states(self):
         self.false_positives.assign(0)
         self.true_positives.assign(0)
+
 
 class ThreatScore(tf.keras.metrics.Metric):
     def __init__(self, name="threat_score", **kwargs):
@@ -74,17 +79,21 @@ class ThreatScore(tf.keras.metrics.Metric):
         self.tp.assign(0)
         self.fp.assign(0)
         self.fn.assign(0)
+
+
 @keras.utils.register_keras_serializable()
 class FillNaNs(keras.layers.Layer):
     def __init__(self, fill_val, **kwargs):
         super().__init__(**kwargs)
         self.fill_val = tf.convert_to_tensor(fill_val, dtype=tf.float32)
+
     @tf.function(jit_compile=True)
     def call(self, x):
         return tf.where(tf.math.is_nan(x), self.fill_val, x)
 
     def get_config(self):
         return {**super().get_config(), "fill_val": self.fill_val.numpy().item()}
+
 
 class FalseAlarmRate(tf.keras.metrics.Metric):
     def __init__(self, name="false_alarm_rate", **kwargs):
@@ -104,34 +113,48 @@ class FalseAlarmRate(tf.keras.metrics.Metric):
         self.true_positives.assign_add(tp)
 
     def result(self):
-        return self.false_positives / (self.false_positives + self.true_positives + self.epsilon)
+        return self.false_positives / (
+            self.false_positives + self.true_positives + self.epsilon
+        )
 
     def reset_states(self):
         self.false_positives.assign(0)
         self.true_positives.assign(0)
+
+
 @keras.utils.register_keras_serializable()
 class FastNormalize(keras.layers.Layer):
     def __init__(self, mean, std, **kwargs):
         super().__init__(**kwargs)
         self.mean = tf.convert_to_tensor(mean, dtype=tf.float32)
         self.std = tf.convert_to_tensor(std, dtype=tf.float32)
-        self._mean_list = mean.numpy().tolist() if hasattr(mean, 'numpy') else list(mean)
-        self._std_list = std.numpy().tolist() if hasattr(std, 'numpy') else list(std)
+        self._mean_list = (
+            mean.numpy().tolist() if hasattr(mean, "numpy") else list(mean)
+        )
+        self._std_list = std.numpy().tolist() if hasattr(std, "numpy") else list(std)
 
     def call(self, x):
         return tf.math.subtract(x, self.mean) / (self.std + 1e-6)
 
     def get_config(self):
         config = super().get_config()
-        config.update({
-            "mean": self._mean_list,
-            "std": self._std_list,
-        })
+        config.update(
+            {
+                "mean": self._mean_list,
+                "std": self._std_list,
+            }
+        )
         return config
+
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_paths", nargs='+', required=True, help="List of .keras model files for soft voting ensemble")
+    parser.add_argument(
+        "--model_paths",
+        nargs="+",
+        required=True,
+        help="List of .keras model files for soft voting ensemble",
+    )
     args = parser.parse_args()
 
     logging.info(f"Using models: {args.model_paths}")
@@ -142,7 +165,14 @@ def main():
 
     # Load test data
     test_years = list(range(2013, 2023))
-    ds_test = get_dataloader("tensorflow-tfds", DATA_ROOT, test_years, "test", batch_size=128, select_keys=input_keys)
+    ds_test = get_dataloader(
+        "tensorflow-tfds",
+        DATA_ROOT,
+        test_years,
+        "test",
+        batch_size=128,
+        select_keys=input_keys,
+    )
 
     # Run predictions and collect ground truth
     y_true_all = []
@@ -163,17 +193,17 @@ def main():
 
     # Compute metrics manually
     metric_objects = [
-        tf.keras.metrics.AUC(curve='PR', name='AUCPR', num_thresholds=1000),
-        tf.keras.metrics.BinaryAccuracy(name='BinaryAccuracy'),
-        tf.keras.metrics.Precision(name='Precision'),
-        tf.keras.metrics.Recall(name='Recall'),
-        tf.keras.metrics.TruePositives(name='TruePositives'),
-        tf.keras.metrics.FalsePositives(name='FalsePositives'),
-        tf.keras.metrics.TrueNegatives(name='TrueNegatives'),
-        tf.keras.metrics.FalseNegatives(name='FalseNegatives'),
+        tf.keras.metrics.AUC(curve="PR", name="AUCPR", num_thresholds=1000),
+        tf.keras.metrics.BinaryAccuracy(name="BinaryAccuracy"),
+        tf.keras.metrics.Precision(name="Precision"),
+        tf.keras.metrics.Recall(name="Recall"),
+        tf.keras.metrics.TruePositives(name="TruePositives"),
+        tf.keras.metrics.FalsePositives(name="FalsePositives"),
+        tf.keras.metrics.TrueNegatives(name="TrueNegatives"),
+        tf.keras.metrics.FalseNegatives(name="FalseNegatives"),
         FalseAlarmRate(),
-        tfm.F1Score(from_logits=False, name='F1'),
-        ThreatScore()
+        tfm.F1Score(from_logits=False, name="F1"),
+        ThreatScore(),
     ]
 
     for metric in metric_objects:
@@ -183,6 +213,7 @@ def main():
     logging.info("Soft-Voting Ensemble Metrics:")
     for metric in metric_objects:
         logging.info(f"{metric.name}: {metric.result().numpy():.4f}")
+
 
 if __name__ == "__main__":
     main()

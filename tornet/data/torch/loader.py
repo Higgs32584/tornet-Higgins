@@ -27,17 +27,20 @@ def numpy_to_torch(d: Dict[str, np.ndarray]):
         d[key] = torch.from_numpy(np.array(val))
     return d
 
-def make_torch_loader(data_root: str, 
-                data_type:str='train', # or 'test'
-                years: list=list(range(2013,2023)),
-                batch_size: int=128, 
-                weights: Dict=None,
-                include_az: bool=False,
-                random_state:int=1234,
-                select_keys: list=None,
-                tilt_last: bool=True,
-                from_tfds: bool=False,
-                workers:int=8):
+
+def make_torch_loader(
+    data_root: str,
+    data_type: str = "train",  # or 'test'
+    years: list = list(range(2013, 2023)),
+    batch_size: int = 128,
+    weights: Dict = None,
+    include_az: bool = False,
+    random_state: int = 1234,
+    select_keys: list = None,
+    tilt_last: bool = True,
+    from_tfds: bool = False,
+    workers: int = 8,
+):
     """
     Initializes torch.utils.data.DataLoader for training CNN Tornet baseline.
 
@@ -53,14 +56,14 @@ def make_torch_loader(data_root: str,
     tilt_last - If True (default), order of dimensions is left as [batch,azimuth,range,tilt]
                 If False, order is permuted to [batch,tilt,azimuth,range]
     from_tfds - Use TFDS data loader, requires this version to be
-                built and TFDS_DATA_ROOT to be set.  
+                built and TFDS_DATA_ROOT to be set.
                 See tornet/data/tdfs/tornet/README.
                 If False (default), the basic loader is used
 
     weights is optional, if provided must be a dict of the form
       weights={'wN':wN,'w0':w0,'w1':w1,'w2':w2,'wW':wW}
     where wN,w0,w1,w2,wW are numeric weights assigned to random,
-    ef0, ef1, ef2+ and warnings samples, respectively.  
+    ef0, ef1, ef2+ and warnings samples, respectively.
 
     After loading TorNet samples, this does the following preprocessing:
     - Optionaly permutes order of dimensions to not have tilt last
@@ -69,36 +72,44 @@ def make_torch_loader(data_root: str,
       includes r, r^{-1} (and az if include_az is True)
     - Splits sample into inputs,label
     - If weights is provided, returns inputs,label,sample_weights
-    """    
+    """
     if from_tfds:
         import tensorflow_datasets as tfds
-        import tornet.data.tfds.tornet.tornet_dataset_builder # registers 'tornet'
-        ds = tfds.data_source('tornet')
+
+        import tornet.data.tfds.tornet.tornet_dataset_builder  # registers 'tornet'
+
+        ds = tfds.data_source("tornet")
 
         transform_list = []
 
         # Assumes data was saved with tilt_last=True and converts it to tilt_last=False
         if not tilt_last:
-            transform_list.append(lambda d: pp.permute_dims(d,(0,3,1,2)))
+            transform_list.append(lambda d: pp.permute_dims(d, (0, 3, 1, 2)))
 
         transform_list.append(
             lambda d: pp.remove_time_dim(d),
-            lambda d: pp.add_coordinates(d, include_az=include_az, tilt_last=tilt_last, backend=torch),
-            lambda d: pp.split_x_y(d)
+            lambda d: pp.add_coordinates(
+                d, include_az=include_az, tilt_last=tilt_last, backend=torch
+            ),
+            lambda d: pp.split_x_y(d),
         )
 
         if weights:
-            transform_list.append(lambda xy: pp.compute_sample_weight(*xy, **weights, backend=torch))
-        
+            transform_list.append(
+                lambda xy: pp.compute_sample_weight(*xy, **weights, backend=torch)
+            )
+
         if select_keys is not None:
             transform_list.append(
-                lambda xy: pp.select_keys(xy[0],keys=select_keys)+xy[1:]
+                lambda xy: pp.select_keys(xy[0], keys=select_keys) + xy[1:]
             )
-            
-         # Dataset, with preprocessing
+
+        # Dataset, with preprocessing
         transform = transforms.Compose(transform_list)
 
-        datasets = [TFDSTornadoDataset(ds['%s-%d' % (data_type,y)] ,transform) for y in years]
+        datasets = [
+            TFDSTornadoDataset(ds["%s-%d" % (data_type, y)], transform) for y in years
+        ]
         dataset = torch.utils.data.ConcatDataset(datasets)
 
     else:
@@ -107,44 +118,53 @@ def make_torch_loader(data_root: str,
         transform_list = [
             lambda d: numpy_to_torch(d),
             lambda d: pp.remove_time_dim(d),
-            lambda d: pp.add_coordinates(d, include_az=include_az, tilt_last=tilt_last, backend=torch),
+            lambda d: pp.add_coordinates(
+                d, include_az=include_az, tilt_last=tilt_last, backend=torch
+            ),
             lambda d: pp.split_x_y(d),
         ]
 
         if weights:
-            transform_list.append(lambda xy: pp.compute_sample_weight(*xy, **weights, backend=torch))
-        
+            transform_list.append(
+                lambda xy: pp.compute_sample_weight(*xy, **weights, backend=torch)
+            )
+
         if select_keys is not None:
             transform_list.append(
-                lambda xy: (pp.select_keys(xy[0],keys=select_keys),)+xy[1:]
+                lambda xy: (pp.select_keys(xy[0], keys=select_keys),) + xy[1:]
             )
 
         # Dataset, with preprocessing
         transform = transforms.Compose(transform_list)
 
-        dataset = TornadoDataset(file_list,
-                                 variables=ALL_VARIABLES,
-                                 n_frames=1,
-                                 tilt_last=tilt_last,
-                                 transform=transform)
+        dataset = TornadoDataset(
+            file_list,
+            variables=ALL_VARIABLES,
+            n_frames=1,
+            tilt_last=tilt_last,
+            transform=transform,
+        )
 
-    loader = torch.utils.data.DataLoader(dataset,batch_size=batch_size,num_workers=workers)
+    loader = torch.utils.data.DataLoader(
+        dataset, batch_size=batch_size, num_workers=workers
+    )
     return loader
 
-    
-class TornadoDataset(TornadoDataLoader,Dataset):
+
+class TornadoDataset(TornadoDataLoader, Dataset):
     pass
 
+
 class TFDSTornadoDataset(Dataset):
-    def __init__(self,ds,transforms=None):
-          self.ds=ds
-          self.transforms=transforms
-    
+    def __init__(self, ds, transforms=None):
+        self.ds = ds
+        self.transforms = transforms
+
     def __len__(self):
         return len(self.ds)
 
     def __getitem__(self, idx):
         x = self.ds.__getitem__(idx)
         if self.transforms:
-             x=self.transforms(x)
+            x = self.transforms(x)
         return x

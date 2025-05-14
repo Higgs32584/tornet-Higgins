@@ -1,50 +1,61 @@
-import os
 import argparse
 import logging
+import os
+
 import matplotlib.pyplot as plt
-import tensorflow as tf
-from tensorflow import keras
-from tornet.data.loader import get_dataloader
-from sklearn.metrics import precision_recall_curve
 import numpy as np
+import tensorflow as tf
+from sklearn.metrics import precision_recall_curve
+from tensorflow import keras
+
 from custom_func import FalseAlarmRate, ThreatScore
+from tornet.data.loader import get_dataloader
 
 # Set up environment
 TFDS_DATA_DIR = "/home/ubuntu/tfds"
 DATA_ROOT = TFDS_DATA_DIR
-os.environ['TORNET_ROOT'] = DATA_ROOT
-os.environ['TFDS_DATA_DIR'] = TFDS_DATA_DIR
+os.environ["TORNET_ROOT"] = DATA_ROOT
+os.environ["TFDS_DATA_DIR"] = TFDS_DATA_DIR
 
 logging.basicConfig(level=logging.INFO)
+
 
 @keras.utils.register_keras_serializable()
 class SpatialAttention(keras.layers.Layer):
     def __init__(self, kernel_size=7, **kwargs):
         super().__init__(**kwargs)
-        self.conv = keras.layers.Conv2D(1, kernel_size=kernel_size, padding='same', activation='sigmoid')
+        self.conv = keras.layers.Conv2D(
+            1, kernel_size=kernel_size, padding="same", activation="sigmoid"
+        )
+
     def call(self, x):
         avg_pool = tf.reduce_mean(x, axis=-1, keepdims=True)
         max_pool = tf.reduce_max(x, axis=-1, keepdims=True)
         attention = self.conv(tf.concat([avg_pool, max_pool], axis=-1))
         return keras.layers.Multiply()([x, attention])
 
+
 @keras.utils.register_keras_serializable()
 class ChannelAttention(keras.layers.Layer):
     def __init__(self, ratio=16, **kwargs):
         super().__init__(**kwargs)
-        self.dense1 = keras.layers.Dense(1, activation='sigmoid')
+        self.dense1 = keras.layers.Dense(1, activation="sigmoid")
+
     def call(self, x):
         avg_pool = tf.reduce_mean(x, axis=[1, 2], keepdims=True)
         attention = self.dense1(avg_pool)
         return keras.layers.Multiply()([x, attention])
+
 
 @keras.utils.register_keras_serializable()
 class FillNaNs(keras.layers.Layer):
     def __init__(self, fill_val, **kwargs):
         super().__init__(**kwargs)
         self.fill_val = tf.convert_to_tensor(fill_val, dtype=tf.float32)
+
     def call(self, x):
         return tf.where(tf.math.is_nan(x), self.fill_val, x)
+
 
 @keras.utils.register_keras_serializable()
 class FastNormalize(keras.layers.Layer):
@@ -52,23 +63,34 @@ class FastNormalize(keras.layers.Layer):
         super().__init__(**kwargs)
         self.mean = tf.convert_to_tensor(mean, dtype=tf.float32)
         self.std = tf.convert_to_tensor(std, dtype=tf.float32)
+
     def call(self, x):
         return (x - self.mean) / (self.std + 1e-6)
+
 
 @keras.utils.register_keras_serializable()
 class ExpandDimsTwice(keras.layers.Layer):
     def call(self, inputs):
         return tf.expand_dims(tf.expand_dims(inputs, axis=1), axis=1)
 
+
 @keras.utils.register_keras_serializable()
 class StackAvgMax(tf.keras.layers.Layer):
     def call(self, inputs):
         return tf.stack(inputs, axis=1)
 
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--model_dir", type=str, required=True, help="Directory containing .keras models")
-    parser.add_argument("--threshold", type=float, default=0.5, help="Threshold for binary predictions")
+    parser.add_argument(
+        "--model_dir",
+        type=str,
+        required=True,
+        help="Directory containing .keras models",
+    )
+    parser.add_argument(
+        "--threshold", type=float, default=0.5, help="Threshold for binary predictions"
+    )
     args = parser.parse_args()
 
     model_dir = args.model_dir
@@ -81,8 +103,8 @@ def main():
         years=range(2020, 2023),
         data_type="train",
         batch_size=128,
-        weights={'wN': 1.0, 'w0': 1.0, 'w1': 1.0, 'w2': 1.0, 'wW': 1.0},
-        select_keys=None  # Will dynamically use first model's inputs
+        weights={"wN": 1.0, "w0": 1.0, "w1": 1.0, "w2": 1.0, "wW": 1.0},
+        select_keys=None,  # Will dynamically use first model's inputs
     )
     logging.info("Dataset ready.")
 
@@ -106,8 +128,10 @@ def main():
         model_path = os.path.join(model_dir, fname)
         logging.info(f"Loading model: {fname}")
         model = keras.models.load_model(
-            model_path, compile=False, safe_mode=False,
-            custom_objects={"<lambda>": lambda x: tf.abs(x - 0.5)}
+            model_path,
+            compile=False,
+            safe_mode=False,
+            custom_objects={"<lambda>": lambda x: tf.abs(x - 0.5)},
         )
 
         # Predict with the current model
@@ -119,7 +143,7 @@ def main():
 
         # Precision-recall curve
         precision, recall, _ = precision_recall_curve(y_true.ravel(), y_scores.ravel())
-        aucpr = tf.keras.metrics.AUC(curve='PR')
+        aucpr = tf.keras.metrics.AUC(curve="PR")
         aucpr.update_state(y_true.ravel(), y_scores.ravel())
         auc_val = aucpr.result().numpy()
 
@@ -139,6 +163,6 @@ def main():
     plt.tight_layout()
     plt.savefig("AUC_PR_CURVES.png")
 
+
 if __name__ == "__main__":
     main()
-

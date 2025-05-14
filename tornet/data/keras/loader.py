@@ -45,7 +45,7 @@ class KerasDataLoader(keras.utils.PyDataset):
         data_root: str,
         data_type: str = "train",
         years: list = list(range(2013, 2023)),
-        catalog: pd.DataFrame=None,
+        catalog: pd.DataFrame = None,
         batch_size: int = 128,
         weights: Dict = None,
         include_az: bool = False,
@@ -66,8 +66,8 @@ class KerasDataLoader(keras.utils.PyDataset):
         include_az - if True, coordinates also contains az field
         random_state - random seed for shuffling files
         select_keys - only generate a subset of keys from each tornet sample
-        tilt_last - if True (default), order of dimensions is left as 
-            [batch,azimuth,range,tilt] If False, order is permuted to 
+        tilt_last - if True (default), order of dimensions is left as
+            [batch,azimuth,range,tilt] If False, order is permuted to
             [batch,tilt,azimuth,range]
         workers, use_multiprocessing, max_queue_size - see:
         https://keras.io/api/utils/python_utils/#pydataset-class
@@ -87,10 +87,12 @@ class KerasDataLoader(keras.utils.PyDataset):
         self.weights = weights
         self.include_az = include_az
         self.random_state = random_state
-        self.select_keys=select_keys
+        self.select_keys = select_keys
 
         self.tilt_last = tilt_last
-        self.file_list = query_catalog(data_root, data_type, years, random_state, catalog=catalog)
+        self.file_list = query_catalog(
+            data_root, data_type, years, random_state, catalog=catalog
+        )
 
     def __len__(self) -> int:
         "Returns number of batches"
@@ -105,11 +107,20 @@ class KerasDataLoader(keras.utils.PyDataset):
 
         element_list = []
         for f in files_batch:
-            element_list.append(read_file(f, variables=ALL_VARIABLES, n_frames=1, tilt_last=self.tilt_last))
+            element_list.append(
+                read_file(
+                    f, variables=ALL_VARIABLES, n_frames=1, tilt_last=self.tilt_last
+                )
+            )
 
         # Transforms
         for element in element_list:
-            pp.add_coordinates(element, include_az=self.include_az, backend=np, tilt_last=self.tilt_last)
+            pp.add_coordinates(
+                element,
+                include_az=self.include_az,
+                backend=np,
+                tilt_last=self.tilt_last,
+            )
 
         # Add batch dimension to coordinates
         for el in element_list:
@@ -119,12 +130,12 @@ class KerasDataLoader(keras.utils.PyDataset):
         batch = {}
         for key in element_list[0].keys():
             batch[key] = np.concatenate([el[key] for el in element_list])
-        
+
         # split into x,y
         x, y = pp.split_x_y(batch)
 
         if self.weights:
             x, y, w = pp.compute_sample_weight(x, y, **self.weights, backend=np)
-            return pp.select_keys(x,keys=self.select_keys),y,w
+            return pp.select_keys(x, keys=self.select_keys), y, w
         else:
-            return pp.select_keys(x,keys=self.select_keys), y
+            return pp.select_keys(x, keys=self.select_keys), y

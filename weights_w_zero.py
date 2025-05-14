@@ -1,9 +1,13 @@
-import tensorflow as tf
 import numpy as np
+import tensorflow as tf
 
 # Load the model and sample data
-model = tf.keras.models.load_model("/home/ubuntu/tornet-Higgins/best_models_so_far/tornadoDetector_v6.keras")
-sample_input = np.random.rand(1, *model.input_shape[1:]).astype(np.float32)  # replace with real sample if possible
+model = tf.keras.models.load_model(
+    "/home/ubuntu/tornet-Higgins/best_models_so_far/tornadoDetector_v6.keras"
+)
+sample_input = np.random.rand(1, *model.input_shape[1:]).astype(
+    np.float32
+)  # replace with real sample if possible
 
 # Choose a loss and dummy label for gradient tracking
 loss_fn = tf.keras.losses.BinaryCrossentropy()
@@ -35,8 +39,14 @@ for w, g in zip(model.trainable_weights, grads):
         zero_grad_params.append((w.name, grad_norm))
 
 # Analyze activations for conv layers
-activation_model = tf.keras.Model(inputs=model.input,
-                                  outputs=[layer.output for layer in model.layers if isinstance(layer, tf.keras.layers.Conv2D)])
+activation_model = tf.keras.Model(
+    inputs=model.input,
+    outputs=[
+        layer.output
+        for layer in model.layers
+        if isinstance(layer, tf.keras.layers.Conv2D)
+    ],
+)
 
 activations = activation_model(sample_input, training=False)
 
