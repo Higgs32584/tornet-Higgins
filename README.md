@@ -134,7 +134,7 @@ python scripts/tornado_detection/test_tornado_keras_ensemble.py \
 ## Downloading the Data and set up is the same as [Tornet benchmark](https://github.com/mit-ll/tornet)
 
 ## 📷 Sample Visualizations
-![Precision Recall Curve](image.png)
+![Precision Recall Curve](TEST_AUC_PR_curves.png)
 
 *tornado_detector_baseline_v1 vs tornadoDetector_v5(wide resnet) and tornadoDetector_v6(gated mechanism)*
 
