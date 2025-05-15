@@ -5,6 +5,7 @@ This contribution extends the [Tornet benchmark](https://github.com/mit-ll/torne
 ---
 
 ## 📌 Overview (Update 5-15-2025)
+The new Model and the ensemble are available [here](https://huggingface.co/Higgs32/tornet-ml-higgins)
 
 This project
 - Cosine decay with warmup also replaces Exponential Decay
@@ -96,9 +97,6 @@ This project
 - PReLU along with architectural changes
 
 Ensemble models consistently outperform the [baseline](https://huggingface.co/tornet-ml/tornado_detector_baseline_v1) on all major metrics.
-
-The new Model and the ensemble are available [here](https://huggingface.co/Higgs32/tornet-ml-higgins)
-
 
 ---
 
