@@ -110,7 +110,7 @@ Ensemble models consistently outperform the [baseline](https://huggingface.co/to
 - `tornet_train_cv_wide_resnet.py` – Cross-validation for Wide ResNet model (AUCPR)
 - `tornet_train_cv_baseline.py` – Cross-validation for baseline model (AUCPR)
 ### new `scripts/tornado_detection/`
-- `train_PReLU.py` – Training logic for new WRN PReLU 
+- `train_textbook.py` – Training logic for new WRN PReLU 
 - `tornet_train_cv_textbook.py` – Cross-validation for new WRN PReLU 
 - `test_tornado_keras_ensemble.py` – Batch evaluation and ensemble for keras files in a particular directory
 
