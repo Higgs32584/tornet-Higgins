@@ -126,8 +126,8 @@ The new Model and the ensemble are available [here](https://huggingface.co/Higgs
 ## 🧪 Ensemble Evaluation Usage
 
 ```bash
-python scripts/tornado_detection/test_tornado_keras_batch.py \
-  --model_paths MULTIPLE_MODEL_PATHS \
+python scripts/tornado_detection/test_tornado_keras_ensemble.py \
+  --model_dir MODEL_DIR_PATH \
   --threshold THRESHOLD
 ```
 ---
