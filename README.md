@@ -1,4 +1,4 @@
-# 🌀 Tornado Prediction with Wide ResNet Ensembles
+# 🌀 Tornado Prediction with Wide ResNet Ensembles update 5-15-2025
 
 This contribution extends the [Tornet benchmark](https://github.com/mit-ll/tornet) with optimized deep learning architectures for tornado detection using polarimetric radar data. The focus is on enhancing performance via model refinement and ensembling, culminating in a lightweight and high-performing prediction pipeline that utilizes wide_resnet with a gated mechanism, as well as an 85 percent reduction in memory
 
