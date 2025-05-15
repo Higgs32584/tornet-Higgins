@@ -112,9 +112,9 @@ The new Model and the ensemble are available [here](https://huggingface.co/Higgs
 - `tornet_train_cv_wide_resnet.py` – Cross-validation for Wide ResNet model (AUCPR)
 - `tornet_train_cv_baseline.py` – Cross-validation for baseline model (AUCPR)
 ### new `scripts/tornado_detection/`
-- `train_wide_resnet.py` – Training logic for Wide ResNet (WRN) variants
-- `tornet_train_cv_textbook.py` – Cross-validation for new model
-- `tornet_train_cv_wide_resnet.py` – Cross-validation for Wide ResNet model (AUCPR)
+- `train_PReLU.py` – Training logic for new WRN PReLU 
+- `tornet_train_cv_textbook.py` – Cross-validation for new WRN PReLU 
+- `test_tornado_keras_ensemble.py` – Batch evaluation and ensemble for keras files in a particular directory
 
 - Saved `.keras` models – Versioned model checkpoints
 
@@ -124,7 +124,7 @@ The new Model and the ensemble are available [here](https://huggingface.co/Higgs
 ---
 
 ## 🧪 Ensemble Evaluation Usage
-
+Put all .keras in the same file
 ```bash
 python scripts/tornado_detection/test_tornado_keras_ensemble.py \
   --model_dir MODEL_DIR_PATH \
@@ -140,7 +140,7 @@ python scripts/tornado_detection/test_tornado_keras_ensemble.py \
 
 
 
-![Wide Resnet Implementation](_home_ubuntu_tornet-Higgins_ensemble_of_v7TH3899_fold5seed99TH4242.keras.png)
+![WRN Textbook final](_home_ubuntu_tornet-Higgins_ensemble_of_v7TH3899_fold5seed99TH4242.keras.png)
 *Structure of Wide Resnet Implementation*
 
 
