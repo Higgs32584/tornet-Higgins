@@ -267,7 +267,7 @@ DEFAULT_CONFIG = {
     "val_years": [2021, 2022],
     "batch_size": 128,
     "model": "wide_resnet",
-    "start_filters": 96,
+    "start_filters": 48,
     "learning_rate": 0.00441,
     "l2_reg": 3.83e-7,
     "label_smoothing": 0.0845,
