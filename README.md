@@ -134,12 +134,11 @@ python scripts/tornado_detection/test_tornado_keras_ensemble.py \
 ## 📷 Sample Visualizations
 ![Precision Recall Curve](TEST_AUC_PR_curves.png)
 
-*tornado_detector_baseline_v1 vs tornadoDetector_v5(wide resnet) and tornadoDetector_v6(gated mechanism)*
 
 
 
 ![WRN Textbook final](_home_ubuntu_tornet-Higgins_ensemble_of_v7TH3899_fold5seed99TH4242.keras.png)
-*Structure of Wide Resnet Implementation*
+*Structure of Newer Wide Resnet Implementation*
 
 
 ## Citation
