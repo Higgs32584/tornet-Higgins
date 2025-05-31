@@ -4,7 +4,6 @@ import os
 import sys
 from datetime import datetime
 from typing import List, Tuple
-from tensorflow.keras import backend as K
 
 import keras
 import numpy as np
@@ -19,6 +18,8 @@ from tensorflow.keras.layers import (
     Conv2D,
     Dense,
     Dropout,
+    AveragePooling2D,
+    Concatenate,
     GlobalAveragePooling2D,
     GlobalMaxPooling2D,
     MaxPool2D,
@@ -38,6 +39,7 @@ from tornet.models.keras.losses import mae_loss
 from tornet.utils.general import make_exp_dir
 
 logging.basicConfig(level=logging.INFO)
+SEED = 42
 
 
 class WarmUpCosine(tf.keras.optimizers.schedules.LearningRateSchedule):
@@ -75,9 +77,8 @@ class WarmUpCosine(tf.keras.optimizers.schedules.LearningRateSchedule):
         return lr
 
 
-# SEED = 42
-# np.random.seed(SEED)
-# tf.random.set_seed(SEED)
+np.random.seed(SEED)
+tf.random.set_seed(SEED)
 
 # Environment Variables
 DATA_ROOT = "/home/ubuntu/tfds"
@@ -93,25 +94,29 @@ if gpus:
 
 tf.config.optimizer.set_jit(True)
 os.environ["TF_XLA_FLAGS"] = "--tf_xla_auto_jit=2"
+tf.config.optimizer.set_jit(True)
 # Create a unique directory for this study
 timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
 STUDY_DIR = os.path.join("optuna_studies", f"study_{timestamp}")
 os.makedirs(STUDY_DIR, exist_ok=True)
 
-
 DEFAULT_CONFIG = {
-    "epochs": 50,
+    "epochs": 100,
     "input_variables": ["DBZ", "VEL", "KDP", "ZDR", "RHOHV", "WIDTH"],
     "train_years": [2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020],
     "val_years": [2021, 2022],
     "batch_size": 128,
     "model": "wide_resnet",
-    "start_filters": 48,
-    "learning_rate": 1e-4,
-    "decay_rate": 0.958,
-    "l2_reg": 1e-5,
+    "start_filters": 96,
+    "learning_rate": 0.00441,
+    "l2_reg": 3.83e-7,
+    "label_smoothing": 0.0845,
+    "dropout_rate": 0.0997,
+    "warmup_epochs": 4,
+    "t_mul": 2.0,
+    "m_mul": 0.809,
+    "attention_dropout": 0.0,
     "weights": {"wN": 1.0, "w0": 1.0, "w1": 1.0, "w2": 2.0, "wW": 0.5},
-    "dropout_rate": 0.1,
     "loss": "cce",
     "head": "maxpool",
     "exp_name": "tornado_baseline",
@@ -132,30 +137,67 @@ DEFAULT_CONFIG = {
 }
 
 
-def se_block(x, ratio=16):
-    filters = x.shape[-1]
-    se = GlobalAveragePooling2D()(x)
-    se = Dense(filters // ratio, activation="relu")(se)
-    se = Dense(filters, activation="sigmoid")(se)
-    return Multiply()([x, se])
+def dense_layer(x, c, growth_rate, kernel_regularizer=None):
+    out = BatchNormalization()(x)
+    out = ReLU()(out)
+    out, c = CoordConv2D(
+        growth_rate,
+        kernel_size=3,
+        padding="same",
+        activation=None,
+        kernel_regularizer=kernel_regularizer,
+    )([out, c])
+    x = Concatenate()([x, out])
+    return x, c
+
+
+def dense_block(x, c, num_layers, growth_rate, kernel_regularizer=None):
+    for _ in range(num_layers):
+        x, c = dense_layer(x, c, growth_rate, kernel_regularizer=kernel_regularizer)
+    return x, c
+
+
+def transition_layer(x, c, compression=0.5, kernel_regularizer=None):
+    filters = int(x.shape[-1] * compression)
+
+    x = BatchNormalization()(x)
+    x = ReLU()(x)
+    x = Conv2D(
+        filters, kernel_size=1, use_bias=False, kernel_regularizer=kernel_regularizer
+    )(
+        x
+    )  # ✅ apply reg here
+    x = MaxPool2D(pool_size=2)(x)
+    c = MaxPool2D(pool_size=2)(c)
+
+    return x, c
+
+
+from tensorflow.keras.regularizers import l2
 
 
 def build_model(
     shape: Tuple[int] = (120, 240, 2),
     c_shape: Tuple[int] = (120, 240, 2),
-    attention_dropout: float = 0.2,  # <--- New
     input_variables: List[str] = ALL_VARIABLES,
-    dense_filters: int = 64,
-    start_filters: int = 64,
-    mid_filters: int = 128,
-    l2_reg: float = 0.001,
+    start_filters: int = 48,
+    attention_dropout: float = 0.2,
+    growth_rate: int = 16,
+    l2_reg: float = 1e-5,
+    dense_layers: int = 4,
     dropout_rate: float = 0.1,
+    compression: float = 0.75,
 ) -> keras.Model:
-    background_flag = -3.0  # Constant
-    include_range_folded = True  # Always True
-    inputs = {v: keras.Input(shape, name=v) for v in input_variables}
+    background_flag = -3.0
+    include_range_folded = True
+    reg = l2(l2_reg)
 
+    # Inputs
+    inputs = {v: keras.Input(shape, name=v) for v in input_variables}
     n_sweeps = shape[2]
+    coords = keras.Input(c_shape, name="coordinates")
+    inputs["coordinates"] = coords
+
     x = keras.layers.Concatenate(axis=-1)(
         [normalize(inputs[v], v) for v in input_variables]
     )
@@ -166,29 +208,44 @@ def build_model(
         inputs["range_folded_mask"] = range_folded
         x = keras.layers.Concatenate(axis=-1)([x, range_folded])
 
-    coords = keras.Input(c_shape, name="coordinates")
-    inputs["coordinates"] = coords
-    x = keras.layers.Concatenate(axis=-1)([x, coords])
+    # Initial CoordConv
+    x, c = CoordConv2D(
+        start_filters,
+        kernel_size=3,
+        padding="same",
+        activation=None,
+        kernel_regularizer=reg,
+    )([x, coords])
 
-    x = wide_resnet_block(
-        x=x,
-        stride=1,
-        filters=start_filters,
-        l2_reg=l2_reg,
-        drop_rate=dropout_rate,
+    # Dense Blocks + Transition
+    x, c = dense_block(
+        x, c, num_layers=dense_layers, growth_rate=growth_rate, kernel_regularizer=reg
     )
+    x, c = transition_layer(x, c, compression=compression, kernel_regularizer=reg)
+    x, c = dense_block(
+        x, c, num_layers=dense_layers, growth_rate=growth_rate, kernel_regularizer=reg
+    )
+
+    # SE Block
     x = se_block(x)
+
     x = BatchNormalization()(x)
     x = ReLU()(x)
-    x = depthwise_separable_conv(x, mid_filters, kernel_size=3, l2_reg=l2_reg)
+    x = Conv2D(128, 3, padding="same", use_bias=False)(x)
+
+    # Attention
     attn = Conv2D(1, 1, activation="sigmoid", use_bias=False, name="attention_map")(x)
     attn = Dropout(rate=attention_dropout, name="attention_dropout")(attn)
     x = Multiply()([x, attn])
+
+    # Pooling and projection
     x_avg = GlobalAveragePooling2D()(x)
     x_max = GlobalMaxPooling2D()(x)
     x = keras.layers.Concatenate()([x_avg, x_max])
-    x = Dense(dense_filters)(x)
+
+    x = Dense(64)(x)
     x = PReLU()(x)
+
     output = Dense(1, activation="sigmoid", dtype="float32")(x)
 
     return keras.Model(inputs=inputs, outputs=output)
@@ -206,91 +263,27 @@ def se_block(x, ratio=16, name=None):
     return x
 
 
-def wide_resnet_block(
-    x, filters, stride, l2_reg=1e-4, drop_rate=0.0, project_shortcut=False
-):
-    shortcut_x = x
-    x = BatchNormalization()(x)
-    x = ReLU()(x)
-    x = Conv2D(
-        filters=filters,
-        kernel_size=3,
-        strides=stride,
-        padding="same",
-        use_bias=False,
-        kernel_regularizer=keras.regularizers.l2(l2_reg),
-    )(x)
-    if drop_rate > 0:
-        x = Dropout(drop_rate)(x)
-
-    x = BatchNormalization()(x)
-    x = ReLU()(x)
-    x = Conv2D(
-        filters=filters,
-        kernel_size=3,
-        strides=stride,
-        padding="same",
-        use_bias=False,
-        kernel_regularizer=keras.regularizers.l2(l2_reg),
-    )(x)
-
-    if project_shortcut or shortcut_x.shape[-1] != filters or stride != 1:
-        shortcut_x = Conv2D(
-            filters=filters,
-            kernel_size=3,
-            strides=stride,
-            padding="same",
-            use_bias=False,
-            kernel_regularizer=keras.regularizers.l2(l2_reg),
-        )(shortcut_x)
-
-    x = Add()([x, shortcut_x])
-    return x
-
-
-from tensorflow.keras.layers import DepthwiseConv2D
-
-
-def depthwise_separable_conv(
-    x, filters, kernel_size=3, strides=1, padding="same", l2_reg=1e-4, **kwargs
-):
-    x = DepthwiseConv2D(
-        kernel_size=kernel_size,
-        strides=strides,
-        padding=padding,
-        use_bias=False,
-        depth_multiplier=1,
-        depthwise_regularizer=keras.regularizers.l2(l2_reg),
-    )(x)
-    x = BatchNormalization()(x)
-    x = ReLU()(x)
-    x = Conv2D(
-        filters,
-        kernel_size=1,
-        strides=1,
-        padding="same",
-        use_bias=False,
-        kernel_regularizer=keras.regularizers.l2(l2_reg),
-    )(x)
-    return x
-
-
 def objective(trial):
     try:
         config = DEFAULT_CONFIG.copy()
-        config["learning_rate"] = trial.suggest_float(
-            "learning_rate", 5e-4, 5e-3, log=True
+        config["start_filters"] = trial.suggest_categorical(
+            "start_filters", [16, 32, 48, 64, 96]
         )
-        config["l2_reg"] = trial.suggest_float("l2_reg", 1e-10, 1e-5, log=True)
+        config["growth_rate"] = trial.suggest_categorical(
+            "growth_rate", [8, 16, 24, 32]
+        )
+        config["dense_layers"] = trial.suggest_int("dense_layers", 2, 6)
         config["label_smoothing"] = trial.suggest_float("label_smoothing", 0.0, 0.1)
-        config["dropout_rate"] = trial.suggest_float("dropout_rate", 0.0, 0.20)
-        config["warmup_epochs"] = trial.suggest_int("warmup_epochs", 1, 5)
-        config["t_mul"] = trial.suggest_categorical("t_mul", [1.0, 2.0, 2.5])
-        config["dense_filters"] = trial.suggest_int("dense_filters", 48, 80)
-        config["start_filters"] = trial.suggest_int("start_filters", 48, 80)
-        config["mid_filters"] = trial.suggest_int("mid_filters", 64, 256)
-        config["m_mul"] = trial.suggest_float("m_mul", 0.8, 1.0)
+        config["compression"] = trial.suggest_float("compression", 0.4, 0.8)
+        config["learning_rate"] = trial.suggest_float(
+            "learning_rate", 1e-6, 1e-3, log=True
+        )
+
+        # 🛡️ Regularization
+        config["l2_reg"] = trial.suggest_float("l2_reg", 1e-10, 1e-4, log=True)
+        config["dropout_rate"] = trial.suggest_float("dropout_rate", 0.0, 0.3)
         config["attention_dropout"] = trial.suggest_float("attention_dropout", 0.0, 0.4)
+
         logging.info(f"Tuning with config: {config}")
 
         ds_train = get_dataloader(
@@ -319,12 +312,12 @@ def objective(trial):
         model = build_model(
             shape=in_shapes,
             c_shape=c_shapes,
-            dense_filters=config["dense_filters"],
-            start_filters=config["start_filters"],
-            mid_filters=config["mid_filters"],
             input_variables=config["input_variables"],
             attention_dropout=config["attention_dropout"],
             l2_reg=config["l2_reg"],
+            dense_layers=config["dense_layers"],
+            start_filters=config["start_filters"],
+            growth_rate=config["growth_rate"],
             dropout_rate=config["dropout_rate"],
         )
 
@@ -333,7 +326,6 @@ def objective(trial):
         )
         steps_per_epoch = len(ds_train)
         print(steps_per_epoch)
-        total_epochs = config["epochs"]
         lr = WarmUpCosine(
             base_lr=config["learning_rate"],
             warmup_steps=config["warmup_epochs"] * steps_per_epoch,
@@ -383,27 +375,26 @@ def objective(trial):
         tf.keras.backend.clear_session()
         import gc
 
+        gc.collect()
+
         return best_aucpr
     except tf.errors.ResourceExhaustedError as e:
         print(f"Trial {trial.number} pruned due to resource exhaustion: {e}")
+        tf.keras.backend.clear_session()
+        import gc
 
+        gc.collect()
         raise optuna.exceptions.TrialPruned()
 
     except Exception as e:
         # Optional: prune on any unexpected issue during model build
         print(f"Trial {trial.number} failed: {e}")
-        raise optuna.exceptions.TrialPruned()
-    finally:
         tf.keras.backend.clear_session()
-        K.clear_session()
         import gc
 
         gc.collect()
+        raise optuna.exceptions.TrialPruned()
 
-
-timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-STUDY_DIR = os.path.join("optuna_studies", f"study_{timestamp}")
-os.makedirs(STUDY_DIR, exist_ok=True)
 
 all_trials_path = os.path.join(STUDY_DIR, "all_trials.json")
 all_trials = []
@@ -434,13 +425,13 @@ def log_trial(trial, trial_results):
 
 
 if __name__ == "__main__":
-
     study = optuna.create_study(
         direction="maximize",
-        sampler=optuna.samplers.TPESampler(multivariate=True),
+        sampler=optuna.samplers.TPESampler(seed=SEED, multivariate=True),
         pruner=optuna.pruners.HyperbandPruner(),
     )
-    study.optimize(objective, timeout=8 * 3600)
+    study.optimize(objective, n_trials=100)
+
     best_trial_data = {
         "best_trial_id": study.best_trial.number,
         "best_params": study.best_trial.params,

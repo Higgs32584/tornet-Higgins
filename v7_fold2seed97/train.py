@@ -34,7 +34,8 @@ from tornet.models.keras.layers import CoordConv2D
 from tornet.utils.general import make_exp_dir
 
 logging.basicConfig(level=logging.ERROR)
-SEED = 99
+SEED = 97
+# Set random seeds for reproducibility
 os.environ["PYTHONHASHSEED"] = str(SEED)
 random.seed(SEED)
 np.random.seed(SEED)
@@ -145,8 +146,9 @@ def build_model(
     coords = keras.Input(c_shape, name="coordinates")
     inputs["coordinates"] = coords
 
-    x = wide_resnet_block(
+    x, c = wide_resnet_block(
         x=x,
+        c=coords,
         stride=1,
         filters=start_filters,
         l2_reg=l2_reg,
@@ -185,7 +187,7 @@ def se_block(x, ratio=16, name=None):
 
 
 def wide_resnet_block(
-    x, filters, stride, l2_reg=1e-4, drop_rate=0.0, project_shortcut=False
+    x, c, filters, stride, l2_reg=1e-4, drop_rate=0.0, project_shortcut=False
 ):
     shortcut_x, shortcut_c = x, c
     x = BatchNormalization()(x)
@@ -275,8 +277,8 @@ if gpus:
 DEFAULT_CONFIG = {
     "epochs": 100,
     "input_variables": ["DBZ", "VEL", "KDP", "ZDR", "RHOHV", "WIDTH"],
-    "train_years": [2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020],
-    "val_years": [2021, 2022],
+    "train_years": [2013, 2014, 2017, 2018, 2019, 2020, 2021, 2022],
+    "val_years": [2015, 2016],
     "batch_size": 128,
     "start_filters": 48,
     "learning_rate": 0.00441,

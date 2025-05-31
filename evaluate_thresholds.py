@@ -86,11 +86,22 @@ def threat_score(y_true, y_pred):
     return tp / (tp + fn + fp + 1e-6)
 
 
+@keras.utils.register_keras_serializable()
+class SelectAttentionBranch(tf.keras.layers.Layer):
+    def __init__(self, index, **kwargs):
+        super().__init__(**kwargs)
+        self.index = index
+
+    def call(self, x):
+        # x has shape (batch, num_branches)
+        return tf.expand_dims(x[:, self.index], axis=-1)
+
+
 DEFAULT_CONFIG = {
     "epochs": 100,
     "input_variables": ["DBZ", "VEL", "KDP", "ZDR", "RHOHV", "WIDTH"],
-    "train_years": [2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020],
-    "val_years": [2021, 2022],
+    "train_years": [2013, 2014, 2015, 2016, 2017, 2018, 2021, 2022],
+    "val_years": [2019, 2020],
     "batch_size": 128,
     "dataloader": "tensorflow-tfds",
     "dataloader_kwargs": {

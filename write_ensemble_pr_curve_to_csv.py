@@ -1,22 +1,26 @@
 import argparse
 import logging
 import os
-import tempfile
-
 import numpy as np
 import pandas as pd
 import tensorflow as tf
-import tqdm
-from sklearn.metrics import precision_recall_curve
 from tensorflow import keras
+from sklearn.metrics import precision_recall_curve
+import tqdm
 
 from tornet.data.loader import get_dataloader
+from tornet.metrics.keras import metrics as tfm
+from custom_func import FalseAlarmRate, ThreatScore
+from tornet.models.keras.layers import CoordConv2D
+import tensorflow_datasets as tfds
+import tornet.data.tfds.tornet.tornet_dataset_builder  # registers 'tornet'
 
 # Set environment variables
 TFDS_DATA_DIR = "/home/ubuntu/tfds"
 DATA_ROOT = TFDS_DATA_DIR
-os.environ["TORNET_ROOT"] = DATA_ROOT
 os.environ["TFDS_DATA_DIR"] = TFDS_DATA_DIR
+os.environ["TORNET_ROOT"] = DATA_ROOT
+tf.config.optimizer.set_jit(True)
 
 logging.basicConfig(level=logging.INFO)
 
@@ -27,20 +31,12 @@ class FillNaNs(keras.layers.Layer):
         super().__init__(**kwargs)
         self.fill_val = tf.convert_to_tensor(fill_val, dtype=tf.float32)
 
+    @tf.function(jit_compile=True)
     def call(self, x):
         return tf.where(tf.math.is_nan(x), self.fill_val, x)
 
-
-@keras.utils.register_keras_serializable()
-class ExpandDimsTwice(keras.layers.Layer):
-    def call(self, inputs):
-        return tf.expand_dims(tf.expand_dims(inputs, axis=1), axis=1)
-
-
-@keras.utils.register_keras_serializable()
-class StackAvgMax(tf.keras.layers.Layer):
-    def call(self, inputs):
-        return tf.stack(inputs, axis=1)
+    def get_config(self):
+        return {**super().get_config(), "fill_val": self.fill_val.numpy().item()}
 
 
 @keras.utils.register_keras_serializable()
@@ -61,23 +57,37 @@ class FastNormalize(keras.layers.Layer):
         return {**super().get_config(), "mean": self._mean_list, "std": self._std_list}
 
 
+@keras.utils.register_keras_serializable()
+class ExpandDimsTwice(keras.layers.Layer):
+    def call(self, inputs):
+        return tf.expand_dims(tf.expand_dims(inputs, axis=1), axis=1)
+
+
+@keras.utils.register_keras_serializable()
+class StackAvgMax(keras.layers.Layer):
+    def call(self, inputs):
+        return tf.stack(inputs, axis=1)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--model_paths", nargs="+", required=True, help="Paths to .keras model files"
     )
     parser.add_argument(
-        "--output_csv",
-        type=str,
-        default=None,
-        help="Output CSV path for ensemble PR curve",
+        "--output_csv", type=str, default=None, help="Output CSV path for PR curve"
+    )
+    parser.add_argument(
+        "--dataloader",
+        help="Which data loader to use for loading test data",
+        default="tensorflow-tfds",
+        choices=["keras", "tensorflow", "tensorflow-tfds", "torch", "torch-tfds"],
     )
     args = parser.parse_args()
 
     model_paths = args.model_paths
     model_names = [os.path.splitext(os.path.basename(p))[0] for p in model_paths]
 
-    # Default output path
     if args.output_csv:
         output_csv = args.output_csv
     else:
@@ -85,69 +95,57 @@ def main():
         joined_name = "_".join(model_names)
         output_csv = os.path.join("pr_curves", f"ensemble_{joined_name}.csv")
 
-    # Load dataset once
-    logging.info("Loading test data into memory...")
-    dataset = get_dataloader(
-        dataloader="tensorflow-tfds",
-        data_root=DATA_ROOT,
-        years=range(2013, 2023),
-        data_type="test",
-        batch_size=128,
+    logging.info("Loading test data...")
+    model_paths = args.model_paths
+    models = []
+    for path in model_paths:
+        model = tf.keras.models.load_model(
+            path,
+            safe_mode=False,
+            compile=False,
+        )
+        models.append(model)
+        logging.info(f"Loaded model from: {path}")
+
+    # Set up data loader
+    test_years = range(2013, 2023)
+    ds_test = get_dataloader(
+        args.dataloader,
+        DATA_ROOT,
+        test_years,
+        "test",
+        128,
         weights={"wN": 1.0, "w0": 1.0, "w1": 1.0, "w2": 1.0, "wW": 1.0},
-        select_keys=None,  # Lazy load input shape from first model
+        select_keys=list(models[0].input.keys()),
     )
 
-    # Store batches for reuse
-    batches = []
     y_true_all = []
-    for batch in dataset:
+    y_score_all = []
+
+    for batch in tqdm.tqdm(ds_test):
         inputs, labels, _ = batch
-        batches.append(inputs)
+        preds = [model.predict_on_batch(inputs) for model in models]
+        preds_stack = tf.stack(preds, axis=0)
+        ensemble_preds = tf.reduce_mean(preds_stack, axis=0)
         y_true_all.append(labels.numpy())
+        y_score_all.append(ensemble_preds)
+
     y_true = np.concatenate(y_true_all, axis=0).ravel()
-    logging.info(f"Cached {len(batches)} batches.")
+    y_scores = np.concatenate(y_score_all, axis=0).ravel()
 
-    # Init score array
-    ensemble_sum = np.zeros_like(y_true, dtype=np.float32)
-    num_models = 0
-
-    for path in model_paths:
-        model_name = os.path.basename(path)
-        logging.info(f"Loading model: {model_name}")
-        model = keras.models.load_model(
-            path,
-            compile=False,
-            safe_mode=False,
-            custom_objects={"<lambda>": lambda x: tf.abs(x - 0.5)},
-        )
-
-        batch_preds = []
-        for inputs in batches:
-            preds = model.predict_on_batch(inputs)
-            batch_preds.append(preds)
-
-        y_scores = np.concatenate(batch_preds, axis=0).ravel()
-        ensemble_sum += y_scores
-        num_models += 1
-
-        del model
-        tf.keras.backend.clear_session()
-
-    # Average predictions across models
-    ensemble_scores = ensemble_sum / num_models
-
-    # PR curve
-    precision, recall, thresholds = precision_recall_curve(y_true, ensemble_scores)
+    precision, recall, thresholds = precision_recall_curve(y_true, y_scores)
     df = pd.DataFrame(
         {
-            "threshold": np.append(thresholds, 1.0),
+            "threshold": np.append(
+                thresholds, 1.0
+            ),  # Ensure matching shape with precision/recall
             "precision": precision,
             "recall": recall,
         }
     )
 
     df.to_csv(output_csv, index=False)
-    logging.info(f"Saved ensemble PR curve to {output_csv}")
+    logging.info(f"Saved PR curve data to {output_csv}")
 
 
 if __name__ == "__main__":

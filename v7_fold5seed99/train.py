@@ -23,8 +23,11 @@ from tensorflow.keras.layers import (
     ReLU,
     Reshape,
 )
+from tensorflow.keras.optimizers import AdamW
+from tensorflow.keras.optimizers.schedules import CosineDecayRestarts
 
 import tornet.data.tfds.tornet.tornet_dataset_builder
+from custom_func import FalseAlarmRate, ThreatScore
 from tornet.data import preprocess as pp
 from tornet.data.constants import ALL_VARIABLES, CHANNEL_MIN_MAX
 from tornet.data.loader import get_dataloader
@@ -35,6 +38,7 @@ from tornet.utils.general import make_exp_dir
 
 logging.basicConfig(level=logging.ERROR)
 SEED = 99
+# Set random seeds for reproducibility
 os.environ["PYTHONHASHSEED"] = str(SEED)
 random.seed(SEED)
 np.random.seed(SEED)
@@ -121,7 +125,7 @@ class FillNaNs(keras.layers.Layer):
 def build_model(
     shape: Tuple[int] = (120, 240, 2),
     c_shape: Tuple[int] = (120, 240, 2),
-    attention_dropout: float = 0.2,
+    attention_dropout: float = 0.2,  # <--- New
     input_variables: List[str] = ALL_VARIABLES,
     start_filters: int = 64,
     l2_reg: float = 0.001,
@@ -145,8 +149,9 @@ def build_model(
     coords = keras.Input(c_shape, name="coordinates")
     inputs["coordinates"] = coords
 
-    x = wide_resnet_block(
+    x, c = wide_resnet_block(
         x=x,
+        c=coords,
         stride=1,
         filters=start_filters,
         l2_reg=l2_reg,
@@ -185,7 +190,7 @@ def se_block(x, ratio=16, name=None):
 
 
 def wide_resnet_block(
-    x, filters, stride, l2_reg=1e-4, drop_rate=0.0, project_shortcut=False
+    x, c, filters, stride, l2_reg=1e-4, drop_rate=0.0, project_shortcut=False
 ):
     shortcut_x, shortcut_c = x, c
     x = BatchNormalization()(x)
@@ -327,6 +332,7 @@ def main(config):
     wW = config.get("wW")
     input_variables = config.get("input_variables")
     exp_name = config.get("exp_name")
+    model = config.get("model")
     exp_dir = config.get("exp_dir")
     train_years = config.get("train_years")
     val_years = config.get("val_years")
@@ -379,6 +385,8 @@ def main(config):
     from_logits = False
     steps_per_epoch = len(ds_train)
     print(steps_per_epoch)
+    total_epochs = 100
+    total_steps = steps_per_epoch * total_epochs
 
     lr = WarmUpCosine(
         base_lr=config["learning_rate"],
@@ -392,6 +400,7 @@ def main(config):
         from_logits=from_logits, label_smoothing=config["label_smoothing"]
     )
     opt = keras.optimizers.Adam(learning_rate=lr)
+    # Metrics (Optimize AUCPR)
     metrics = [
         keras.metrics.AUC(
             from_logits=from_logits, curve="PR", name="aucpr", num_thresholds=2000
@@ -456,6 +465,7 @@ def main(config):
         ds_train, epochs=epochs, validation_data=ds_val, callbacks=callbacks, verbose=1
     )
 
+    # Get Best Metrics
     best_aucpr = max(history.history.get("val_aucpr", [0]))
     return {"aucpr": best_aucpr}
 

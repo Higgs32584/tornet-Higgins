@@ -57,39 +57,14 @@ class FastNormalize(keras.layers.Layer):
 
     def get_config(self):
         config = super().get_config()
-        config.update(
-            {
-                "mean": self._mean_list,
-                "std": self._std_list,
-            }
-        )
+        config.update({"mean": self._mean_list, "std": self._std_list})
         return config
 
 
-def main():
-    parser = argparse.ArgumentParser()
-    parser.add_argument(
-        "--model_path", type=str, required=True, help="Path to the .keras model file"
-    )
-    parser.add_argument(
-        "--output_csv",
-        type=str,
-        help="Optional: output CSV path for precision-recall data",
-    )
-    args = parser.parse_args()
+def process_model(model_path, output_dir):
+    model_name = os.path.splitext(os.path.basename(model_path))[0]
+    output_csv = os.path.join(output_dir, f"{model_name}.csv")
 
-    model_path = args.model_path
-
-    # Derive default output CSV path if not provided
-    if args.output_csv:
-        output_csv = args.output_csv
-    else:
-        model_name = os.path.splitext(os.path.basename(model_path))[0]
-        output_dir = "pr_curves"
-        os.makedirs(output_dir, exist_ok=True)
-        output_csv = os.path.join(output_dir, f"{model_name}.csv")
-
-    # Load model
     logging.info(f"Loading model from {model_path}")
     model = keras.models.load_model(
         model_path,
@@ -98,7 +73,6 @@ def main():
         custom_objects={"<lambda>": lambda x: tf.abs(x - 0.5)},
     )
 
-    # Load test data
     dataset = get_dataloader(
         dataloader="tensorflow-tfds",
         data_root=DATA_ROOT,
@@ -112,10 +86,9 @@ def main():
     y_true_all = []
     y_score_all = []
 
-    logging.info("Running inference...")
+    logging.info(f"Running inference for {model_name}...")
     import tqdm
 
-    from_logits = True
     for batch in tqdm.tqdm(dataset):
         inputs, labels, _ = batch
         preds = model.predict_on_batch(inputs)
@@ -125,23 +98,38 @@ def main():
     y_true = np.concatenate(y_true_all, axis=0).ravel()
     y_scores = np.concatenate(y_score_all, axis=0).ravel()
 
-    if from_logits == True:
-        y_scores = tf.math.sigmoid(np.concatenate(y_score_all, axis=0).ravel()).numpy()
-
     precision, recall, thresholds = precision_recall_curve(y_true, y_scores)
 
     df = pd.DataFrame(
         {
-            "threshold": np.append(
-                thresholds, 1.0
-            ),  # Ensure matching shape with precision/recall
+            "threshold": np.append(thresholds, 1.0),
             "precision": precision,
             "recall": recall,
         }
     )
 
     df.to_csv(output_csv, index=False)
-    logging.info(f"Saved PR curve data to {output_csv}")
+    logging.info(f"Saved PR curve for {model_name} to {output_csv}")
+
+
+def main():
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--model_paths",
+        type=str,
+        required=True,
+        help="Comma-separated list of model paths (.keras files)",
+    )
+    parser.add_argument(
+        "--output_dir", type=str, default="pr_curves", help="Directory to store CSVs"
+    )
+    args = parser.parse_args()
+
+    model_paths = [path.strip() for path in args.model_paths.split(",")]
+    os.makedirs(args.output_dir, exist_ok=True)
+
+    for model_path in model_paths:
+        process_model(model_path, args.output_dir)
 
 
 if __name__ == "__main__":

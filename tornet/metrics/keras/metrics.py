@@ -37,12 +37,37 @@ class Precision(FromLogitsMixin, keras.metrics.Precision): ...
 class Recall(FromLogitsMixin, keras.metrics.Recall): ...
 
 
+# @keras.utils.register_keras_serializable()
+# class F1Score(keras.metrics.Metric):
+#     def __init__(self, name="f1", from_logits=False, **kwargs):
+#         super(F1Score, self).__init__(name=name, **kwargs)
+#         self.precision = Precision(from_logits)
+#         self.recall = Recall(from_logits)
+
+#     def update_state(self, y_true, y_pred, sample_weight=None):
+#         self.precision.update_state(y_true, y_pred, sample_weight)
+#         self.recall.update_state(y_true, y_pred, sample_weight)
+
+#     def result(self):
+#         p = self.precision.result()
+#         r = self.recall.result()
+#         return (2 * p * r) / (p + r + keras.config.epsilon())
+
+#     def reset_state(self):
+#         self.precision.reset_state()
+#         self.recall.reset_state()
+
+
+import tensorflow as tf
+from keras import backend as K
+
+
 @keras.utils.register_keras_serializable()
 class F1Score(keras.metrics.Metric):
-    def __init__(self, name="f1", from_logits=False, **kwargs):
+    def __init__(self, name="f1", threshold=0.5, from_logits=False, **kwargs):
         super(F1Score, self).__init__(name=name, **kwargs)
-        self.precision = Precision(from_logits)
-        self.recall = Recall(from_logits)
+        self.precision = Precision(from_logits, threshold)
+        self.recall = Recall(from_logits, threshold)
 
     def update_state(self, y_true, y_pred, sample_weight=None):
         self.precision.update_state(y_true, y_pred, sample_weight)

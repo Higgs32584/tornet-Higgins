@@ -11,35 +11,37 @@ import tensorflow as tf
 import tensorflow_datasets as tfds
 from tensorflow import keras
 from tensorflow.keras.layers import (
-    Add,
-    BatchNormalization,
-    Conv2D,
+    GlobalMaxPooling2D,
     Dense,
     Dropout,
     GlobalAveragePooling2D,
-    GlobalMaxPooling2D,
-    Multiply,
-    PReLU,
-    ReLU,
-    Reshape,
+    Conv2D,
+    Activation,
+    Add,
+    GlobalAveragePooling2D,
+    Dense,
+    LayerNormalization,
+    Dropout,
+    DepthwiseConv2D,
 )
-
+from tensorflow.keras.regularizers import l2
 import tornet.data.tfds.tornet.tornet_dataset_builder
+from custom_func import FalseAlarmRate, ThreatScore
 from tornet.data import preprocess as pp
 from tornet.data.constants import ALL_VARIABLES, CHANNEL_MIN_MAX
 from tornet.data.loader import get_dataloader
 from tornet.data.preprocess import get_shape
 from tornet.metrics.keras import metrics as tfm
-from tornet.models.keras.layers import CoordConv2D
+
+# from tornet.models.keras.layers import CoordConv2D
 from tornet.utils.general import make_exp_dir
 
 logging.basicConfig(level=logging.ERROR)
-SEED = 99
+SEED = 98
 os.environ["PYTHONHASHSEED"] = str(SEED)
 random.seed(SEED)
 np.random.seed(SEED)
 tf.random.set_seed(SEED)
-# Environment Variables
 DATA_ROOT = "/home/ubuntu/tfds"
 TORNET_ROOT = DATA_ROOT
 TFDS_DATA_DIR = DATA_ROOT
@@ -65,9 +67,6 @@ class WarmUpCosine(tf.keras.optimizers.schedules.LearningRateSchedule):
         super().__init__()
         self.base_lr = base_lr
         self.warmup_steps = warmup_steps
-        self.restart_steps = restart_steps
-        self.t_mul = t_mul
-        self.m_mul = m_mul
         self.alpha = alpha
 
         self.cosine_decay = tf.keras.optimizers.schedules.CosineDecayRestarts(
@@ -89,19 +88,9 @@ class WarmUpCosine(tf.keras.optimizers.schedules.LearningRateSchedule):
         )
         return lr
 
-    def get_config(self):
-        return {
-            "base_lr": self.base_lr,
-            "warmup_steps": self.warmup_steps,
-            "restart_steps": self.restart_steps,
-            "t_mul": self.t_mul,
-            "m_mul": self.m_mul,
-            "alpha": self.alpha,
-        }
 
-    @classmethod
-    def from_config(cls, config):
-        return cls(**config)
+import tensorflow as tf
+import numpy as np
 
 
 @keras.utils.register_keras_serializable()
@@ -118,113 +107,72 @@ class FillNaNs(keras.layers.Layer):
         return {**super().get_config(), "fill_val": self.fill_val.numpy().item()}
 
 
+def convnext_block(x, drop_rate=0.0, layer_scale_init_value=1e-6, name=None):
+    input_channels = x.shape[-1]
+    shortcut = x
+
+    x = DepthwiseConv2D(kernel_size=7, padding="same", name=f"{name}_dwconv")(x)
+    x = LayerNormalization(epsilon=1e-6, name=f"{name}_ln")(x)
+    x = Dense(4 * input_channels, name=f"{name}_pw1")(x)
+    x = Activation("gelu", name=f"{name}_gelu")(x)
+    x = Dense(input_channels, name=f"{name}_pw2")(x)
+
+    # Layer scale (if enabled)
+    if layer_scale_init_value > 0:
+        gamma = tf.Variable(
+            initial_value=layer_scale_init_value
+            * tf.ones((input_channels,), dtype=tf.float32),
+            trainable=True,
+            name=f"{name}_gamma",
+        )
+        x = x * gamma
+
+    # Dropout (optional)
+    if drop_rate > 0:
+        x = Dropout(drop_rate, name=f"{name}_drop")(x)
+
+    # Residual connection
+    x = Add(name=f"{name}_add")([shortcut, x])
+    return x
+
+
 def build_model(
     shape: Tuple[int] = (120, 240, 2),
     c_shape: Tuple[int] = (120, 240, 2),
-    attention_dropout: float = 0.2,
     input_variables: List[str] = ALL_VARIABLES,
+    epsilon_layer: float = 1e-6,
     start_filters: int = 64,
-    l2_reg: float = 0.001,
     dropout_rate: float = 0.1,
 ) -> keras.Model:
-    background_flag = -3.0  # Constant
-    include_range_folded = True  # Always True
-    inputs = {v: keras.Input(shape, name=v) for v in input_variables}
+    background_flag = -3.0
+    include_range_folded = True
 
+    # Inputs per variable
+    inputs = {v: keras.Input(shape, name=v) for v in input_variables}
     n_sweeps = shape[2]
     x = keras.layers.Concatenate(axis=-1)(
         [normalize(inputs[v], v) for v in input_variables]
     )
     x = FillNaNs(background_flag)(x)
-
     if include_range_folded:
         range_folded = keras.Input(shape[:2] + (n_sweeps,), name="range_folded_mask")
         inputs["range_folded_mask"] = range_folded
         x = keras.layers.Concatenate(axis=-1)([x, range_folded])
-
     coords = keras.Input(c_shape, name="coordinates")
     inputs["coordinates"] = coords
-
-    x = wide_resnet_block(
-        x=x,
-        stride=1,
-        filters=start_filters,
-        l2_reg=l2_reg,
-        drop_rate=dropout_rate,
+    x = keras.layers.Concatenate(axis=-1)([x, coords])
+    x = Conv2D(96, kernel_size=4, strides=4, name="stem_conv")(x)
+    x = LayerNormalization(epsilon=epsilon_layer, name="stem_ln")(x)
+    x = convnext_block(
+        x, drop_rate=dropout_rate, layer_scale_init_value=1e-6, name="convnext_block"
     )
-    x = se_block(x)
-
-    x = Conv2D(128, 3, padding="same", use_bias=False)(x)
-    x = BatchNormalization()(x)
-    x = ReLU()(x)
-
-    attn = Conv2D(1, 1, activation="sigmoid", use_bias=False, name="attention_map")(x)
-    attn = Dropout(rate=attention_dropout, name="attention_dropout")(attn)
-    x = Multiply()([x, attn])
-
     x_avg = GlobalAveragePooling2D()(x)
     x_max = GlobalMaxPooling2D()(x)
     x = keras.layers.Concatenate()([x_avg, x_max])
-    x = Dense(64)(x)
-    x = PReLU()(x)
-    output = Dense(1, activation="sigmoid", dtype="float32")(x)
-
+    x = LayerNormalization(epsilon=epsilon_layer, name="head_ln")(x)
+    x = Dense(128, activation="gelu", name="head_dense")(x)
+    output = Dense(1, activation="sigmoid", name="pred")(x)
     return keras.Model(inputs=inputs, outputs=output)
-
-
-def se_block(x, ratio=16, name=None):
-    filters = x.shape[-1]
-    se = GlobalAveragePooling2D(name=f"{name}_gap" if name else None)(x)
-    se = Dense(
-        filters // ratio, activation="relu", name=f"{name}_fc1" if name else None
-    )(se)
-    se = Dense(filters, activation="sigmoid", name=f"{name}_fc2" if name else None)(se)
-    se = Reshape((1, 1, filters), name=f"{name}_reshape" if name else None)(se)
-    x = Multiply(name=f"{name}_scale" if name else None)([x, se])
-    return x
-
-
-def wide_resnet_block(
-    x, filters, stride, l2_reg=1e-4, drop_rate=0.0, project_shortcut=False
-):
-    shortcut_x, shortcut_c = x, c
-    x = BatchNormalization()(x)
-    x = ReLU()(x)
-    x, c = CoordConv2D(
-        filters,
-        kernel_size=3,
-        strides=stride,
-        padding="same",
-        activation=None,
-        kernel_regularizer=keras.regularizers.l2(l2_reg),
-    )([x, c])
-
-    if drop_rate > 0:
-        x = Dropout(drop_rate)(x)
-
-    x = BatchNormalization()(x)
-    x = ReLU()(x)
-    x, c = CoordConv2D(
-        filters,
-        kernel_size=3,
-        strides=1,
-        padding="same",
-        activation=None,
-        kernel_regularizer=keras.regularizers.l2(l2_reg),
-    )([x, c])
-
-    if project_shortcut or shortcut_x.shape[-1] != filters or stride != 1:
-        shortcut_x, c = CoordConv2D(
-            filters,
-            kernel_size=1,
-            strides=stride,
-            padding="same",
-            activation=None,
-            kernel_regularizer=keras.regularizers.l2(l2_reg),
-        )([shortcut_x, shortcut_c])
-
-    x = Add()([x, shortcut_x])
-    return x, c
 
 
 @keras.utils.register_keras_serializable()
@@ -258,14 +206,12 @@ def normalize(x, name: str):
     std = np.float32((max_val - min_val) / 2)
     n_sweeps = x.shape[-1]
 
-    # Use tf.constant directly for faster graph compilation
     mean = tf.constant([mean] * n_sweeps, dtype=tf.float32)
     std = tf.constant([std] * n_sweeps, dtype=tf.float32)
 
     return FastNormalize(mean, std)(x)
 
 
-# Enable GPU Memory Growth
 gpus = tf.config.experimental.list_physical_devices("GPU")
 if gpus:
     for gpu in gpus:
@@ -279,21 +225,17 @@ DEFAULT_CONFIG = {
     "val_years": [2021, 2022],
     "batch_size": 128,
     "start_filters": 48,
-    "learning_rate": 0.00441,
-    "l2_reg": 3.83e-7,
-    "label_smoothing": 0.0845,
-    "dropout_rate": 0.0997,
-    "warmup_epochs": 4,
+    "dropout_rate": 0.15,
+    "warmup_epochs": 5,
+    "learning_rate": 3e-4,
+    "label_smoothing": 0.1,
     "t_mul": 2.0,
-    "m_mul": 0.809,
-    "attention_dropout": 0.322,
+    "m_mul": 0.9,
     "wN": 1.0,
     "w0": 1.0,
     "w1": 1.0,
     "w2": 2.0,
     "wW": 0.5,
-    "loss": "cce",
-    "head": "maxpool",
     "exp_name": "tornado_baseline",
     "exp_dir": ".",
     "dataloader": "tensorflow-tfds",
@@ -305,29 +247,22 @@ DEFAULT_CONFIG = {
             "RHOHV",
             "ZDR",
             "WIDTH",
-            "range_folded_mask",
             "coordinates",
+            "range_folded_mask",
         ]
     },
 }
 
 
 def main(config):
-    # Gather all hyperparams
     epochs = config.get("epochs")
     batch_size = config.get("batch_size")
-    start_filters = config.get("start_filters")
-    dropout_rate = config.get("dropout_rate")
     lr = config.get("learning_rate")
-    l2_reg = config.get("l2_reg")
     wN = config.get("wN")
     w0 = config.get("w0")
     w1 = config.get("w1")
     w2 = config.get("w2")
     wW = config.get("wW")
-    input_variables = config.get("input_variables")
-    exp_name = config.get("exp_name")
-    exp_dir = config.get("exp_dir")
     train_years = config.get("train_years")
     val_years = config.get("val_years")
     dataloader = config.get("dataloader")
@@ -336,11 +271,6 @@ def main(config):
     logging.info(f"Using {dataloader} dataloader")
     logging.info(f"Running with config: {config}")
     weights = {"wN": wN, "w0": w0, "w1": w1, "w2": w2, "wW": wW}
-
-    # Data Loaders
-    dataloader_kwargs.update(
-        {"select_keys": input_variables + ["range_folded_mask", "coordinates"]}
-    )
     # Apply to Train and Validation Data
     ds_train = get_dataloader(
         dataloader,
@@ -360,25 +290,22 @@ def main(config):
         {"wN": 1.0, "w0": 1.0, "w1": 1.0, "w2": 1.0, "wW": 1.0},
         **dataloader_kwargs,
     )
-
     x, _, _ = next(iter(ds_train))
+    in_shapes = (None, None, get_shape(x)[-1])
+    c_shapes = (None, None, x["coordinates"].shape[-1])
 
     in_shapes = (120, 240, get_shape(x)[-1])
-    c_shapes = (120, 240, x["coordinates"].shape[-1])
     nn = build_model(
-        attention_dropout=config["attention_dropout"],
         shape=in_shapes,
         c_shape=c_shapes,
-        start_filters=start_filters,
-        l2_reg=l2_reg,
-        input_variables=input_variables,
-        dropout_rate=dropout_rate,
+        input_variables=config["input_variables"],
+        start_filters=config["start_filters"],
+        dropout_rate=config["dropout_rate"],
     )
-    print(nn.summary())
 
+    print(nn.summary())
     from_logits = False
     steps_per_epoch = len(ds_train)
-    print(steps_per_epoch)
 
     lr = WarmUpCosine(
         base_lr=config["learning_rate"],
@@ -388,13 +315,16 @@ def main(config):
         m_mul=config["m_mul"],
         alpha=1e-6,
     )
+
     loss = keras.losses.BinaryCrossentropy(
         from_logits=from_logits, label_smoothing=config["label_smoothing"]
     )
     opt = keras.optimizers.Adam(learning_rate=lr)
+
+    # Metrics (Optimize AUCPR)
     metrics = [
         keras.metrics.AUC(
-            from_logits=from_logits, curve="PR", name="aucpr", num_thresholds=2000
+            from_logits=from_logits, curve="PR", name="AUCPR", num_thresholds=2000
         ),
         keras.metrics.AUC(from_logits=from_logits, name="AUC", num_thresholds=2000),
         tfm.BinaryAccuracy(from_logits, name="BinaryAccuracy"),
@@ -408,60 +338,67 @@ def main(config):
     ]
 
     nn.compile(loss=loss, metrics=metrics, optimizer=opt, jit_compile=True)
-
-    # Experiment Directory
-    expdir = make_exp_dir(exp_dir=exp_dir, prefix=exp_name)
-    with open(os.path.join(expdir, "data.json"), "w") as f:
-        json.dump(
-            {
-                "data_root": DATA_ROOT,
-                "train_data": list(train_years),
-                "val_data": list(val_years),
-            },
-            f,
-        )
-    with open(os.path.join(expdir, "params.json"), "w") as f:
-        json.dump({"config": config}, f)
-    # Copy the training script
-    shutil.copy(__file__, os.path.join(expdir, "train.py"))
-    # Callbacks (Now Monitors AUCPR)
-    checkpoint_name = os.path.join(
-        expdir, "epoch_{epoch:03d}_valAUCPR{val_aucpr:.4f}.keras"
-    )
-
     callbacks = [
-        keras.callbacks.ModelCheckpoint(
-            filepath=checkpoint_name,
-            monitor="val_aucpr",
-            save_best_only=True,
-            mode="max",
-        ),
-        keras.callbacks.CSVLogger(os.path.join(expdir, "history.csv")),
         keras.callbacks.TerminateOnNaN(),
         keras.callbacks.EarlyStopping(
-            monitor="val_aucpr", patience=5, mode="max", restore_best_weights=True
+            monitor="val_AUCPR", patience=5, mode="max", restore_best_weights=True
         ),
     ]
 
-    # TensorBoard Logging
-    if keras.config.backend() == "tensorflow":
-        callbacks.append(
-            keras.callbacks.TensorBoard(
-                log_dir=os.path.join(expdir, "logs"), write_graph=False
-            )
-        )
-
-    # Train Model
     history = nn.fit(
         ds_train, epochs=epochs, validation_data=ds_val, callbacks=callbacks, verbose=1
     )
 
-    best_aucpr = max(history.history.get("val_aucpr", [0]))
-    return {"aucpr": best_aucpr}
+    # Get Best Metrics
+    best_aucpr = max(history.history.get("val_AUCPR", [0]))
+    return {"AUCPR": best_aucpr}
 
 
 if __name__ == "__main__":
     config = DEFAULT_CONFIG
     if len(sys.argv) > 1:
         config.update(json.load(open(sys.argv[1], "r")))
-    main(config)
+
+    # Define CV folds
+    folds = [
+        {
+            "train_years": [2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022],
+            "val_years": [2013, 2014],
+        },
+        {
+            "train_years": [2013, 2014, 2017, 2018, 2019, 2020, 2021, 2022],
+            "val_years": [2015, 2016],
+        },
+        {
+            "train_years": [2013, 2014, 2015, 2016, 2019, 2020, 2021, 2022],
+            "val_years": [2017, 2018],
+        },
+        {
+            "train_years": [2013, 2014, 2015, 2016, 2017, 2018, 2021, 2022],
+            "val_years": [2019, 2020],
+        },
+        {
+            "train_years": [2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020],
+            "val_years": [2021, 2022],
+        },
+    ]
+
+    results = []
+
+    for i, fold in enumerate(folds):
+        print(
+            f"\n================ Fold {i + 1}: Train {fold['train_years']} | Test {fold['val_years']} ================\n"
+        )
+        fold_config = config.copy()
+        fold_config["train_years"] = fold["train_years"]
+        fold_config["val_years"] = fold["val_years"]
+        fold_config["exp_name"] = f"{config['exp_name']}_fold{i+1}"
+        fold_result = main(fold_config)
+        results.append({"fold": i + 1, **fold_result})
+
+    # Print Summary
+    print("\n================ Cross-Validation Summary ================\n")
+    for res in results:
+        print(f"Fold {res['fold']} - AUCPR: {res['AUCPR']:.4f}")
+    mean_aucpr = np.mean([res["AUCPR"] for res in results])
+    print(f"\nMean AUCPR over all folds: {mean_aucpr:.4f}")

@@ -204,6 +204,7 @@ def get_dataloader(
     years: list[int],
     data_type: str,
     batch_size: int,
+    random_state:int,
     weights: Dict[str, float] = None,
     **kwargs,
 ):
@@ -257,6 +258,7 @@ def get_dataloader(
             years,
             batch_size,
             weights,
+            random_state=random_state,
             from_tfds=from_tfds,
             **kwargs,
         )

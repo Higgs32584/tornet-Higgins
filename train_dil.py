@@ -15,6 +15,7 @@ from tensorflow.keras.layers import (
     BatchNormalization,
     Conv2D,
     Dense,
+    DepthwiseConv2D,
     Dropout,
     GlobalAveragePooling2D,
     GlobalMaxPooling2D,
@@ -34,7 +35,7 @@ from tornet.models.keras.layers import CoordConv2D
 from tornet.utils.general import make_exp_dir
 
 logging.basicConfig(level=logging.ERROR)
-SEED = 99
+SEED = 759
 os.environ["PYTHONHASHSEED"] = str(SEED)
 random.seed(SEED)
 np.random.seed(SEED)
@@ -118,11 +119,47 @@ class FillNaNs(keras.layers.Layer):
         return {**super().get_config(), "fill_val": self.fill_val.numpy().item()}
 
 
+from tensorflow.keras import regularizers
+
+
+def depthwise_separable_conv(
+    x,
+    filters,
+    kernel_size=3,
+    kernel_regularizer=None,  # <-- add this
+    kernel_initializer="he_normal",
+    **kwargs,
+):
+    x = DepthwiseConv2D(
+        kernel_size=kernel_size,
+        depth_multiplier=1,
+        padding="same",
+        use_bias=False,
+        depthwise_regularizer=regularizers.l2(kernel_regularizer),
+        depthwise_initializer=kernel_initializer,
+    )(x)
+    x = BatchNormalization()(x)
+    x = ReLU()(x)
+    x = Conv2D(
+        filters,
+        kernel_size=1,
+        kernel_regularizer=regularizers.l2(kernel_regularizer),
+        strides=1,
+        padding="same",
+        use_bias=False,
+        kernel_initializer=kernel_initializer,
+    )(x)
+    return x
+
+
 def build_model(
     shape: Tuple[int] = (120, 240, 2),
     c_shape: Tuple[int] = (120, 240, 2),
-    attention_dropout: float = 0.2,
+    attention_dropout: float = 0.2,  # <--- New
     input_variables: List[str] = ALL_VARIABLES,
+    kernel_initializer: str = "he_normal",
+    dense_filters: int = 64,
+    mid_filters: int = 64,
     start_filters: int = 64,
     l2_reg: float = 0.001,
     dropout_rate: float = 0.1,
@@ -136,7 +173,6 @@ def build_model(
         [normalize(inputs[v], v) for v in input_variables]
     )
     x = FillNaNs(background_flag)(x)
-
     if include_range_folded:
         range_folded = keras.Input(shape[:2] + (n_sweeps,), name="range_folded_mask")
         inputs["range_folded_mask"] = range_folded
@@ -144,6 +180,7 @@ def build_model(
 
     coords = keras.Input(c_shape, name="coordinates")
     inputs["coordinates"] = coords
+    x = keras.layers.Concatenate(axis=-1)([x, coords])
 
     x = wide_resnet_block(
         x=x,
@@ -151,80 +188,108 @@ def build_model(
         filters=start_filters,
         l2_reg=l2_reg,
         drop_rate=dropout_rate,
+        kernel_initializer=kernel_initializer,
     )
-    x = se_block(x)
-
-    x = Conv2D(128, 3, padding="same", use_bias=False)(x)
+    x = se_block(x, kernel_initializer=kernel_initializer)
+    x = depthwise_separable_conv(
+        x,
+        mid_filters,
+        kernel_regularizer=l2_reg,
+        kernel_size=3,
+        kernel_initializer=kernel_initializer,
+    )
     x = BatchNormalization()(x)
-    x = ReLU()(x)
+    x = PReLU(shared_axes=[1, 2])(x)
 
-    attn = Conv2D(1, 1, activation="sigmoid", use_bias=False, name="attention_map")(x)
+    attn = Conv2D(
+        1,
+        1,
+        activation="sigmoid",
+        name="attention_map",
+        kernel_initializer=kernel_initializer,
+    )(x)
     attn = Dropout(rate=attention_dropout, name="attention_dropout")(attn)
     x = Multiply()([x, attn])
 
     x_avg = GlobalAveragePooling2D()(x)
     x_max = GlobalMaxPooling2D()(x)
     x = keras.layers.Concatenate()([x_avg, x_max])
-    x = Dense(64)(x)
+    x = Dense(dense_filters, kernel_initializer=kernel_initializer)(x)
     x = PReLU()(x)
-    output = Dense(1, activation="sigmoid", dtype="float32")(x)
+    output = Dense(
+        1, activation="sigmoid", dtype="float32", kernel_initializer=kernel_initializer
+    )(x)
 
     return keras.Model(inputs=inputs, outputs=output)
 
 
-def se_block(x, ratio=16, name=None):
+def se_block(x, ratio=16, kernel_initializer="he_normal", name=None):
     filters = x.shape[-1]
     se = GlobalAveragePooling2D(name=f"{name}_gap" if name else None)(x)
     se = Dense(
-        filters // ratio, activation="relu", name=f"{name}_fc1" if name else None
+        filters // ratio,
+        activation="relu",
+        name=f"{name}_fc1" if name else None,
+        kernel_initializer=kernel_initializer,
     )(se)
-    se = Dense(filters, activation="sigmoid", name=f"{name}_fc2" if name else None)(se)
+    se = Dense(
+        filters,
+        activation="sigmoid",
+        kernel_initializer=kernel_initializer,
+        name=f"{name}_fc2" if name else None,
+    )(se)
     se = Reshape((1, 1, filters), name=f"{name}_reshape" if name else None)(se)
     x = Multiply(name=f"{name}_scale" if name else None)([x, se])
     return x
 
 
 def wide_resnet_block(
-    x, filters, stride, l2_reg=1e-4, drop_rate=0.0, project_shortcut=False
+    x,
+    filters,
+    stride,
+    l2_reg=1e-4,
+    drop_rate=0.0,
+    project_shortcut=False,
+    kernel_initializer="he_normal",
 ):
-    shortcut_x, shortcut_c = x, c
+    shortcut_x = x
     x = BatchNormalization()(x)
     x = ReLU()(x)
-    x, c = CoordConv2D(
-        filters,
+    x = Conv2D(
+        filters=filters,
         kernel_size=3,
         strides=stride,
         padding="same",
-        activation=None,
+        use_bias=False,
+        kernel_initializer=kernel_initializer,
         kernel_regularizer=keras.regularizers.l2(l2_reg),
-    )([x, c])
-
+    )(x)
     if drop_rate > 0:
         x = Dropout(drop_rate)(x)
 
     x = BatchNormalization()(x)
     x = ReLU()(x)
-    x, c = CoordConv2D(
-        filters,
+    x = Conv2D(
+        filters=filters,
         kernel_size=3,
-        strides=1,
+        strides=stride,
         padding="same",
-        activation=None,
+        kernel_initializer=kernel_initializer,
         kernel_regularizer=keras.regularizers.l2(l2_reg),
-    )([x, c])
+    )(x)
 
     if project_shortcut or shortcut_x.shape[-1] != filters or stride != 1:
-        shortcut_x, c = CoordConv2D(
-            filters,
-            kernel_size=1,
+        shortcut_x = Conv2D(
+            filters=filters,
+            kernel_size=3,
             strides=stride,
             padding="same",
-            activation=None,
+            use_bias=False,
             kernel_regularizer=keras.regularizers.l2(l2_reg),
-        )([shortcut_x, shortcut_c])
+        )(shortcut_x)
 
     x = Add()([x, shortcut_x])
-    return x, c
+    return x
 
 
 @keras.utils.register_keras_serializable()
@@ -275,12 +340,14 @@ if gpus:
 DEFAULT_CONFIG = {
     "epochs": 100,
     "input_variables": ["DBZ", "VEL", "KDP", "ZDR", "RHOHV", "WIDTH"],
-    "train_years": [2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020],
-    "val_years": [2021, 2022],
+    "train_years": [2013, 2014, 2017, 2018, 2019, 2020, 2021, 2022],
+    "val_years": [2015, 2016],
     "batch_size": 128,
     "start_filters": 48,
     "learning_rate": 0.00441,
     "l2_reg": 3.83e-7,
+    "dense_filters": 64,
+    "mid_filters": 128,
     "label_smoothing": 0.0845,
     "dropout_rate": 0.0997,
     "warmup_epochs": 4,
@@ -341,7 +408,6 @@ def main(config):
     dataloader_kwargs.update(
         {"select_keys": input_variables + ["range_folded_mask", "coordinates"]}
     )
-    # Apply to Train and Validation Data
     ds_train = get_dataloader(
         dataloader,
         DATA_ROOT,
@@ -370,6 +436,8 @@ def main(config):
         shape=in_shapes,
         c_shape=c_shapes,
         start_filters=start_filters,
+        dense_filters=config["dense_filters"],
+        mid_filters=config["mid_filters"],
         l2_reg=l2_reg,
         input_variables=input_variables,
         dropout_rate=dropout_rate,
@@ -439,7 +507,7 @@ def main(config):
         keras.callbacks.CSVLogger(os.path.join(expdir, "history.csv")),
         keras.callbacks.TerminateOnNaN(),
         keras.callbacks.EarlyStopping(
-            monitor="val_aucpr", patience=5, mode="max", restore_best_weights=True
+            monitor="val_aucpr", patience=3, mode="max", restore_best_weights=True
         ),
     ]
 

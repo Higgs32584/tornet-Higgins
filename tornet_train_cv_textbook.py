@@ -37,7 +37,7 @@ from tornet.models.keras.layers import CoordConv2D
 from tornet.utils.general import make_exp_dir
 
 logging.basicConfig(level=logging.ERROR)
-SEED = 100
+SEED = 99
 # Set random seeds for reproducibility
 os.environ["PYTHONHASHSEED"] = str(SEED)
 random.seed(SEED)
@@ -131,10 +131,10 @@ def build_model(
 
     coords = keras.Input(c_shape, name="coordinates")
     inputs["coordinates"] = coords
+    x = keras.layers.Concatenate(axis=-1)([x, coords])
 
-    x, c = wide_resnet_block(
+    x = wide_resnet_block(
         x=x,
-        c=coords,
         stride=1,
         filters=start_filters,
         l2_reg=l2_reg,
@@ -178,38 +178,38 @@ def wide_resnet_block(
     shortcut_x, shortcut_c = x, c
     x = BatchNormalization()(x)
     x = ReLU()(x)
-    x, c = CoordConv2D(
+    x = Conv2D(
         filters,
         kernel_size=3,
         strides=stride,
         padding="same",
         activation=None,
         kernel_regularizer=keras.regularizers.l2(l2_reg),
-    )([x, c])
+    )(x)
 
     if drop_rate > 0:
         x = Dropout(drop_rate)(x)
 
     x = BatchNormalization()(x)
     x = ReLU()(x)
-    x, c = CoordConv2D(
+    x = Conv2D(
         filters,
         kernel_size=3,
         strides=1,
         padding="same",
         activation=None,
         kernel_regularizer=keras.regularizers.l2(l2_reg),
-    )([x, c])
+    )(x)
 
     if project_shortcut or shortcut_x.shape[-1] != filters or stride != 1:
-        shortcut_x, c = CoordConv2D(
+        shortcut_x = Conv2D(
             filters,
             kernel_size=1,
             strides=stride,
             padding="same",
             activation=None,
             kernel_regularizer=keras.regularizers.l2(l2_reg),
-        )([shortcut_x, shortcut_c])
+        )(shortcut_x)
 
     x = Add()([x, shortcut_x])
     return x, c

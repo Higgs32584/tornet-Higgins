@@ -81,22 +81,16 @@ class StackAvgMax(tf.keras.layers.Layer):
         return tf.stack(inputs, axis=1)
 
 
-@keras.utils.register_keras_serializable()
-class SelectAttentionBranch(tf.keras.layers.Layer):
-    def __init__(self, index, **kwargs):
-        super().__init__(**kwargs)
-        self.index = index
-
-    def call(self, x):
-        # x has shape (batch, num_branches)
-        return tf.expand_dims(x[:, self.index], axis=-1)  # shape: (batch, 1)
-
-
 def main():
+    import gc
+    from tensorflow.keras import backend as K
+
+    K.clear_session()
+    gc.collect()
+
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--model_paths",
-        nargs="+",
+        "--model_dir",
         help="List of pretrained models to test (.keras files)",
         required=True,
     )
@@ -132,7 +126,11 @@ def main():
         "ThreatScore": ThreatScore,
         # Optional: Add WarmUpCosine if used in learning rate schedule
     }
-    model_paths = args.model_paths
+    model_paths = [
+        os.path.join(args.model_dir, f)
+        for f in os.listdir(args.model_dir)
+        if f.endswith(".keras")
+    ]
     models = []
     for path in model_paths:
         model = tf.keras.models.load_model(
@@ -151,7 +149,7 @@ def main():
         DATA_ROOT,
         test_years,
         "test",
-        128,
+        32,
         weights={"wN": 1.0, "w0": 1.0, "w1": 1.0, "w2": 1.0, "wW": 1.0},
         select_keys=list(models[0].input.keys()),
     )
@@ -181,7 +179,7 @@ def main():
         ),
         tfm.Precision(from_logits=from_logits, thresholds=threshold, name="Precision"),
         tfm.Recall(from_logits=from_logits, thresholds=threshold, name="Recall"),
-        tfm.F1Score(threshold=threshold, name="F1"),
+        tfm.F1Score(from_logits=from_logits, threshold=threshold, name="F1"),
         FalseAlarmRate(name="FalseAlarmRate", threshold=threshold),
         ThreatScore(name="ThreatScore", threshold=threshold),
     ]
@@ -199,6 +197,8 @@ def main():
         preds_stack = tf.stack(preds, axis=0)
         ensemble_preds = tf.reduce_mean(preds_stack, axis=0)
         binary_preds = tf.cast(ensemble_preds >= args.threshold, tf.float32)
+
+        # Mask out samples where the weight is zero
         weights_total = (
             tf.reduce_sum(weights, axis=-1) if len(weights.shape) > 1 else weights
         )

@@ -10,6 +10,7 @@ import numpy as np
 import tensorflow as tf
 import tensorflow_datasets as tfds
 from tensorflow import keras
+from tensorflow.keras import backend as K
 from tensorflow.keras.layers import (
     Add,
     BatchNormalization,
@@ -18,13 +19,17 @@ from tensorflow.keras.layers import (
     Dropout,
     GlobalAveragePooling2D,
     GlobalMaxPooling2D,
+    MaxPool2D,
     Multiply,
     PReLU,
     ReLU,
     Reshape,
 )
+from tensorflow.keras.optimizers import AdamW
+from tensorflow.keras.optimizers.schedules import CosineDecayRestarts
 
 import tornet.data.tfds.tornet.tornet_dataset_builder
+from custom_func import FalseAlarmRate, ThreatScore
 from tornet.data import preprocess as pp
 from tornet.data.constants import ALL_VARIABLES, CHANNEL_MIN_MAX
 from tornet.data.loader import get_dataloader
@@ -34,7 +39,8 @@ from tornet.models.keras.layers import CoordConv2D
 from tornet.utils.general import make_exp_dir
 
 logging.basicConfig(level=logging.ERROR)
-SEED = 99
+SEED = 42
+# Set random seeds for reproducibility
 os.environ["PYTHONHASHSEED"] = str(SEED)
 random.seed(SEED)
 np.random.seed(SEED)
@@ -52,19 +58,37 @@ tf.config.optimizer.set_jit(True)
 logging.info(f"TORNET_ROOT={DATA_ROOT}")
 
 
+@keras.utils.register_keras_serializable()
+class FillNaNs(keras.layers.Layer):
+    def __init__(self, fill_val, **kwargs):
+        super().__init__(**kwargs)
+        self.fill_val = tf.convert_to_tensor(fill_val, dtype=tf.float32)
+
+    @tf.function(jit_compile=True)
+    def call(self, x):
+        return tf.where(tf.math.is_nan(x), self.fill_val, x)
+
+    def get_config(self):
+        return {**super().get_config(), "fill_val": self.fill_val.numpy().item()}
+
+
+@keras.utils.register_keras_serializable()
 class WarmUpCosine(tf.keras.optimizers.schedules.LearningRateSchedule):
     def __init__(
         self,
         base_lr,
         warmup_steps,
+        total_steps,
         restart_steps=5000,
         t_mul=2.0,
         m_mul=1.0,
         alpha=1e-6,
+        **kwargs,
     ):
         super().__init__()
         self.base_lr = base_lr
         self.warmup_steps = warmup_steps
+        self.total_steps = total_steps
         self.restart_steps = restart_steps
         self.t_mul = t_mul
         self.m_mul = m_mul
@@ -93,6 +117,7 @@ class WarmUpCosine(tf.keras.optimizers.schedules.LearningRateSchedule):
         return {
             "base_lr": self.base_lr,
             "warmup_steps": self.warmup_steps,
+            "total_steps": self.total_steps,
             "restart_steps": self.restart_steps,
             "t_mul": self.t_mul,
             "m_mul": self.m_mul,
@@ -104,71 +129,70 @@ class WarmUpCosine(tf.keras.optimizers.schedules.LearningRateSchedule):
         return cls(**config)
 
 
-@keras.utils.register_keras_serializable()
-class FillNaNs(keras.layers.Layer):
-    def __init__(self, fill_val, **kwargs):
-        super().__init__(**kwargs)
-        self.fill_val = tf.convert_to_tensor(fill_val, dtype=tf.float32)
-
-    @tf.function(jit_compile=True)
-    def call(self, x):
-        return tf.where(tf.math.is_nan(x), self.fill_val, x)
-
-    def get_config(self):
-        return {**super().get_config(), "fill_val": self.fill_val.numpy().item()}
-
-
 def build_model(
+    model="wide_resnet",
     shape: Tuple[int] = (120, 240, 2),
     c_shape: Tuple[int] = (120, 240, 2),
-    attention_dropout: float = 0.2,
     input_variables: List[str] = ALL_VARIABLES,
     start_filters: int = 64,
+    nconvs: int = 2,
     l2_reg: float = 0.001,
-    dropout_rate: float = 0.1,
-) -> keras.Model:
-    background_flag = -3.0  # Constant
-    include_range_folded = True  # Always True
-    inputs = {v: keras.Input(shape, name=v) for v in input_variables}
+    background_flag: float = -3.0,
+    include_range_folded: bool = True,
+    dropout_rate=0.1,
+):
 
+    inputs = {}
+    for v in input_variables:
+        inputs[v] = keras.Input(shape, name=v)
     n_sweeps = shape[2]
-    x = keras.layers.Concatenate(axis=-1)(
+
+    normalized_inputs = keras.layers.Concatenate(axis=-1, name="Concatenate1")(
         [normalize(inputs[v], v) for v in input_variables]
     )
-    x = FillNaNs(background_flag)(x)
+    normalized_inputs = FillNaNs(background_flag)(normalized_inputs)
 
     if include_range_folded:
         range_folded = keras.Input(shape[:2] + (n_sweeps,), name="range_folded_mask")
         inputs["range_folded_mask"] = range_folded
-        x = keras.layers.Concatenate(axis=-1)([x, range_folded])
+        normalized_inputs = keras.layers.Concatenate(axis=-1, name="Concatenate2")(
+            [normalized_inputs, range_folded]
+        )
 
-    coords = keras.Input(c_shape, name="coordinates")
-    inputs["coordinates"] = coords
+    cin = keras.Input(c_shape, name="coordinates")
+    inputs["coordinates"] = cin
 
-    x = wide_resnet_block(
-        x=x,
-        stride=1,
-        filters=start_filters,
-        l2_reg=l2_reg,
-        drop_rate=dropout_rate,
-    )
-    x = se_block(x)
+    x, c = normalized_inputs, cin
+
+    if model == "wide_resnet":
+        x, c = wide_resnet_block(
+            x,
+            c,
+            filters=start_filters,
+            widen_factor=2,
+            l2_reg=l2_reg,
+            nconvs=nconvs,
+            drop_rate=dropout_rate,
+        )
+        x = se_block(x)
 
     x = Conv2D(128, 3, padding="same", use_bias=False)(x)
     x = BatchNormalization()(x)
     x = ReLU()(x)
 
-    attn = Conv2D(1, 1, activation="sigmoid", use_bias=False, name="attention_map")(x)
-    attn = Dropout(rate=attention_dropout, name="attention_dropout")(attn)
-    x = Multiply()([x, attn])
+    attention_map = Conv2D(
+        1, 1, activation="sigmoid", name="attention_map", use_bias=False
+    )(x)
+    attention_map = Dropout(rate=0.2, name="attention_dropout")(attention_map)
+    x_weighted = Multiply()([x, attention_map])
 
-    x_avg = GlobalAveragePooling2D()(x)
-    x_max = GlobalMaxPooling2D()(x)
-    x = keras.layers.Concatenate()([x_avg, x_max])
-    x = Dense(64)(x)
-    x = PReLU()(x)
-    output = Dense(1, activation="sigmoid", dtype="float32")(x)
+    x_avg = GlobalAveragePooling2D()(x_weighted)
+    x_max = GlobalMaxPooling2D()(x_weighted)
+    x_concat = keras.layers.Concatenate()([x_avg, x_max])
 
+    x_dense = Dense(64, activation=None)(x_concat)
+    x_dense = PReLU()(x_dense)  # <-- Retain here for adaptive flexibility
+    output = Dense(1, activation="sigmoid", dtype="float32")(x_dense)
     return keras.Model(inputs=inputs, outputs=output)
 
 
@@ -185,45 +209,34 @@ def se_block(x, ratio=16, name=None):
 
 
 def wide_resnet_block(
-    x, filters, stride, l2_reg=1e-4, drop_rate=0.0, project_shortcut=False
+    x, c, filters=64, widen_factor=2, l2_reg=1e-6, drop_rate=0.1, nconvs=2
 ):
     shortcut_x, shortcut_c = x, c
-    x = BatchNormalization()(x)
-    x = ReLU()(x)
-    x, c = CoordConv2D(
-        filters,
-        kernel_size=3,
-        strides=stride,
-        padding="same",
-        activation=None,
-        kernel_regularizer=keras.regularizers.l2(l2_reg),
-    )([x, c])
-
-    if drop_rate > 0:
-        x = Dropout(drop_rate)(x)
-
-    x = BatchNormalization()(x)
-    x = ReLU()(x)
-    x, c = CoordConv2D(
-        filters,
-        kernel_size=3,
-        strides=1,
-        padding="same",
-        activation=None,
-        kernel_regularizer=keras.regularizers.l2(l2_reg),
-    )([x, c])
-
-    if project_shortcut or shortcut_x.shape[-1] != filters or stride != 1:
-        shortcut_x, c = CoordConv2D(
-            filters,
-            kernel_size=1,
-            strides=stride,
+    for _ in range(nconvs):
+        x = BatchNormalization()(x)
+        x = ReLU()(x)
+        x, c = CoordConv2D(
+            filters=filters * widen_factor,
+            kernel_size=3,
             padding="same",
-            activation=None,
             kernel_regularizer=keras.regularizers.l2(l2_reg),
-        )([shortcut_x, shortcut_c])
+            activation=None,
+        )([x, c])
 
+    shortcut_x, shortcut_c = CoordConv2D(
+        filters=filters * widen_factor,
+        kernel_size=1,
+        padding="same",
+        kernel_regularizer=keras.regularizers.l2(l2_reg),
+        activation=None,
+    )([shortcut_x, shortcut_c])
+
+    x = ReLU()(x)  # ⬅️ Adaptive nonlinearity before Add
     x = Add()([x, shortcut_x])
+    x = MaxPool2D(pool_size=2, strides=2, padding="same")(x)
+    c = MaxPool2D(pool_size=2, strides=2, padding="same")(c)
+    if drop_rate > 0:
+        x = Dropout(rate=drop_rate)(x)
     return x, c
 
 
@@ -278,20 +291,19 @@ DEFAULT_CONFIG = {
     "train_years": [2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020],
     "val_years": [2021, 2022],
     "batch_size": 128,
-    "start_filters": 48,
-    "learning_rate": 0.00441,
-    "l2_reg": 3.83e-7,
-    "label_smoothing": 0.0845,
-    "dropout_rate": 0.0997,
-    "warmup_epochs": 4,
-    "t_mul": 2.0,
-    "m_mul": 0.809,
-    "attention_dropout": 0.322,
+    "model": "wide_resnet",
+    "start_filters": 96,
+    "learning_rate": 1e-4,
+    "decay_steps": 1386,
+    "decay_rate": 0.958,
+    "l2_reg": 1e-5,
     "wN": 1.0,
     "w0": 1.0,
     "w1": 1.0,
     "w2": 2.0,
     "wW": 0.5,
+    "nconvs": 2,
+    "dropout_rate": 0.1,
     "loss": "cce",
     "head": "maxpool",
     "exp_name": "tornado_baseline",
@@ -310,6 +322,7 @@ DEFAULT_CONFIG = {
         ]
     },
 }
+import math
 
 
 def main(config):
@@ -327,6 +340,7 @@ def main(config):
     wW = config.get("wW")
     input_variables = config.get("input_variables")
     exp_name = config.get("exp_name")
+    model = config.get("model")
     exp_dir = config.get("exp_dir")
     train_years = config.get("train_years")
     val_years = config.get("val_years")
@@ -366,7 +380,7 @@ def main(config):
     in_shapes = (120, 240, get_shape(x)[-1])
     c_shapes = (120, 240, x["coordinates"].shape[-1])
     nn = build_model(
-        attention_dropout=config["attention_dropout"],
+        model=model,
         shape=in_shapes,
         c_shape=c_shapes,
         start_filters=start_filters,
@@ -379,22 +393,24 @@ def main(config):
     from_logits = False
     steps_per_epoch = len(ds_train)
     print(steps_per_epoch)
+    total_epochs = 100
+    total_steps = steps_per_epoch * total_epochs
 
     lr = WarmUpCosine(
-        base_lr=config["learning_rate"],
-        warmup_steps=config["warmup_epochs"] * steps_per_epoch,
+        base_lr=1e-4,
+        warmup_steps=3 * steps_per_epoch,
+        total_steps=total_steps,
         restart_steps=10 * steps_per_epoch,  # first restart at epoch 10
-        t_mul=config["t_mul"],
-        m_mul=config["m_mul"],
+        t_mul=2.0,
+        m_mul=0.9,
         alpha=1e-6,
     )
-    loss = keras.losses.BinaryCrossentropy(
-        from_logits=from_logits, label_smoothing=config["label_smoothing"]
-    )
+    loss = keras.losses.BinaryCrossentropy(from_logits=from_logits, label_smoothing=0.1)
     opt = keras.optimizers.Adam(learning_rate=lr)
+    # Metrics (Optimize AUCPR)
     metrics = [
         keras.metrics.AUC(
-            from_logits=from_logits, curve="PR", name="aucpr", num_thresholds=2000
+            from_logits=from_logits, curve="PR", name="AUCPR", num_thresholds=2000
         ),
         keras.metrics.AUC(from_logits=from_logits, name="AUC", num_thresholds=2000),
         tfm.BinaryAccuracy(from_logits, name="BinaryAccuracy"),
@@ -425,21 +441,18 @@ def main(config):
     # Copy the training script
     shutil.copy(__file__, os.path.join(expdir, "train.py"))
     # Callbacks (Now Monitors AUCPR)
-    checkpoint_name = os.path.join(
-        expdir, "epoch_{epoch:03d}_valAUCPR{val_aucpr:.4f}.keras"
-    )
-
+    checkpoint_name = os.path.join(expdir, "tornadoDetector_{epoch:03d}.keras")
     callbacks = [
         keras.callbacks.ModelCheckpoint(
-            filepath=checkpoint_name,
-            monitor="val_aucpr",
-            save_best_only=True,
-            mode="max",
+            checkpoint_name, monitor="val_AUCPR", save_best_only=False
         ),
         keras.callbacks.CSVLogger(os.path.join(expdir, "history.csv")),
         keras.callbacks.TerminateOnNaN(),
         keras.callbacks.EarlyStopping(
-            monitor="val_aucpr", patience=5, mode="max", restore_best_weights=True
+            monitor="val_AUCPR", patience=5, mode="max", restore_best_weights=True
+        ),
+        keras.callbacks.EarlyStopping(
+            monitor="val_F1", patience=5, mode="max", restore_best_weights=True
         ),
     ]
 
@@ -456,8 +469,9 @@ def main(config):
         ds_train, epochs=epochs, validation_data=ds_val, callbacks=callbacks, verbose=1
     )
 
-    best_aucpr = max(history.history.get("val_aucpr", [0]))
-    return {"aucpr": best_aucpr}
+    # Get Best Metrics
+    best_aucpr = max(history.history.get("val_AUCPR", [0]))
+    return {"AUCPR": best_aucpr}
 
 
 if __name__ == "__main__":
