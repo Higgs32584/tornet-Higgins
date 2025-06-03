@@ -14,16 +14,14 @@ from tensorflow.keras.layers import (
     BatchNormalization,
     Conv2D,
     Dense,
-    SpatialDropout2D,
     Dropout,
     GlobalAveragePooling2D,
     GlobalMaxPooling2D,
     Multiply,
+    SpatialDropout2D,
     PReLU,
     ReLU,
     Reshape,
-    Concatenate,
-    UpSampling2D,
 )
 import tensorflow as tf
 import numpy as np
@@ -33,9 +31,10 @@ from tornet.data.loader import get_dataloader
 from tornet.data.preprocess import get_shape
 from tornet.metrics.keras import metrics as tfm
 from tornet.utils.general import make_exp_dir
+from tensorflow.keras.regularizers import l2
 
 logging.basicConfig(level=logging.ERROR)
-SEED = 718
+SEED = 1044
 # Set random seeds for reproducibility
 os.environ["PYTHONHASHSEED"] = str(SEED)
 random.seed(SEED)
@@ -52,6 +51,17 @@ os.environ["TF_XLA_FLAGS"] = "--tf_xla_auto_jit=2"
 tf.config.optimizer.set_jit(True)
 
 logging.info(f"TORNET_ROOT={DATA_ROOT}")
+
+
+@keras.utils.register_keras_serializable()
+class SelectAttentionBranch(tf.keras.layers.Layer):
+    def __init__(self, index, **kwargs):
+        super().__init__(**kwargs)
+        self.index = index
+
+    def call(self, x):
+        # x has shape (batch, num_branches)
+        return tf.expand_dims(x[:, self.index], axis=-1)  # shape: (batch, 1)
 
 
 class WarmUpCosine(tf.keras.optimizers.schedules.LearningRateSchedule):
@@ -105,6 +115,8 @@ class WarmUpCosine(tf.keras.optimizers.schedules.LearningRateSchedule):
     def from_config(cls, config):
         return cls(**config)
 
+        return lr
+
 
 @keras.utils.register_keras_serializable()
 class FillNaNs(keras.layers.Layer):
@@ -120,48 +132,10 @@ class FillNaNs(keras.layers.Layer):
         return {**super().get_config(), "fill_val": self.fill_val.numpy().item()}
 
 
-def multi_dilated_attention_head(x, dilation_rates=[1, 2, 4], name_prefix="attn"):
-    branches = []
-    for i, rate in enumerate(dilation_rates):
-        attn = Conv2D(
-            filters=1,
-            kernel_size=1,
-            dilation_rate=rate,
-            padding="same",
-            activation="sigmoid",
-            name=f"{name_prefix}_d{rate}",
-        )(x)
-        branches.append(attn)
-
-    avg_pool = GlobalAveragePooling2D(name=f"{name_prefix}_avg_pool")(x)
-    max_pool = GlobalMaxPooling2D(name=f"{name_prefix}_max_pool")(x)
-    context = Concatenate(name=f"{name_prefix}_context")([avg_pool, max_pool])
-    attention_gates = []
-    for i in range(len(branches)):
-        gate = Dense(
-            1,
-            activation="sigmoid",
-            bias_initializer=tf.keras.initializers.Constant(0.25),
-            name=f"{name_prefix}_gate_d{i}",
-        )(context)
-        gate = Reshape((1, 1, 1), name=f"{name_prefix}_reshape_d{i}")(gate)
-        attention_gates.append(gate)
-
-    weighted_attn_maps = []
-    for i, attn_map in enumerate(branches):
-        weighted = Multiply(name=f"{name_prefix}_scale_d{i}")(
-            [attn_map, attention_gates[i]]
-        )
-        weighted_attn_maps.append(weighted)
-
-    fused_attn = Add(name=f"{name_prefix}_fused")(weighted_attn_maps)
-
-    return fused_attn
-
-
 def build_model(
     shape: Tuple[int] = (120, 240, 2),
     c_shape: Tuple[int] = (120, 240, 2),
+    attention_dropout: float = 0.2,
     input_variables: List[str] = ALL_VARIABLES,
     dense_filters: int = 64,
     mid_filters: int = 64,
@@ -199,12 +173,15 @@ def build_model(
         drop_rate=dropout_rate,
     )
     x = se_block(x, kernel_initializer=GLOROT_INIT)
-    x = deeplab_aspp_block(
+    x = multi_dilated_attention_block(
         x,
         filters=mid_filters,
-        kernel_initializer=HE_INIT,
+        kernel_regularizer=l2_reg,
     )
-    attn = multi_dilated_attention_head(x)
+    x = BatchNormalization()(x)
+    x = ReLU()(x)
+
+    attn = multi_dilated_attention_head(x, dropout_rate=attention_dropout)
 
     x = Multiply()([x, attn])
 
@@ -212,99 +189,12 @@ def build_model(
     x_max = GlobalMaxPooling2D()(x)
     x = keras.layers.Concatenate()([x_avg, x_max])
     x = Dense(dense_filters, kernel_initializer=HE_INIT)(x)
-    x = PReLU(alpha_initializer=tf.keras.initializers.Constant(0.1))(x)
-    x = Dropout(dropout_rate)(x)
-
+    x = PReLU()(x)
     output = Dense(
-        1,
-        activation="sigmoid",
-        dtype="float32",
-        kernel_initializer=GLOROT_INIT,
-        bias_initializer=tf.keras.initializers.Constant(-2.58),  # log(0.07 / 0.93)
+        1, activation="sigmoid", dtype="float32", kernel_initializer=GLOROT_INIT
     )(x)
+
     return keras.Model(inputs=inputs, outputs=output)
-
-
-from tensorflow.keras.layers import (
-    Conv2D,
-    BatchNormalization,
-    ReLU,
-    GlobalAveragePooling2D,
-    Reshape,
-    UpSampling2D,
-    Concatenate,
-)
-from tensorflow.keras.regularizers import l2
-
-
-def deeplab_aspp_block(
-    x,
-    filters,
-    dilation_rates=[6, 12, 18],
-    kernel_initializer="he_normal",
-    kernel_regularizer=None,
-):
-    x = Conv2D(128, kernel_size=3, strides=2, padding="same")(x)
-    input_shape = x.shape
-
-    conv_1x1 = Conv2D(
-        filters,
-        kernel_size=1,
-        padding="same",
-        use_bias=False,
-        kernel_initializer=kernel_initializer,
-        kernel_regularizer=l2(kernel_regularizer),
-    )(x)
-    conv_1x1 = BatchNormalization()(conv_1x1)
-    conv_1x1 = ReLU()(conv_1x1)
-
-    atrous_convs = []
-    for rate in dilation_rates:
-        conv = Conv2D(
-            filters,
-            kernel_size=3,
-            dilation_rate=rate,
-            padding="same",
-            use_bias=False,
-            kernel_initializer=kernel_initializer,
-            kernel_regularizer=l2(kernel_regularizer),
-        )(x)
-        conv = BatchNormalization()(conv)
-        conv = ReLU()(conv)
-        atrous_convs.append(conv)
-
-    x_avg = GlobalAveragePooling2D()(x)
-    x_max = GlobalMaxPooling2D()(x)
-    pooled = keras.layers.Concatenate()([x_avg, x_max])
-    pooled = Reshape((1, 1, 2 * x.shape[-1]))(pooled)
-    pooled = Conv2D(
-        filters,
-        kernel_size=1,
-        padding="same",
-        use_bias=False,
-        kernel_initializer=kernel_initializer,
-        kernel_regularizer=l2(kernel_regularizer),
-    )(pooled)
-    pooled = BatchNormalization()(pooled)
-    pooled = ReLU()(pooled)
-    pooled = UpSampling2D(
-        size=(input_shape[1], input_shape[2]), interpolation="bilinear"
-    )(pooled)
-
-    x = Concatenate()([conv_1x1] + atrous_convs + [pooled])
-
-    x = Conv2D(
-        filters,
-        kernel_size=1,
-        padding="same",
-        use_bias=False,
-        kernel_initializer=kernel_initializer,
-        kernel_regularizer=l2(kernel_regularizer),
-    )(x)
-    x = BatchNormalization()(x)
-    x = ReLU()(x)
-
-    return x
 
 
 def se_block(x, ratio=16, kernel_initializer="glorot_uniform", name=None):
@@ -313,7 +203,7 @@ def se_block(x, ratio=16, kernel_initializer="glorot_uniform", name=None):
     se = Dense(
         filters // ratio,
         activation="relu",
-        kernel_initializer="he_normal",
+        kernel_initializer=kernel_initializer,
         name=f"{name}_fc1" if name else None,
     )(se)
     se = Dense(
@@ -325,6 +215,58 @@ def se_block(x, ratio=16, kernel_initializer="glorot_uniform", name=None):
     se = Reshape((1, 1, filters), name=f"{name}_reshape" if name else None)(se)
     x = Multiply(name=f"{name}_scale" if name else None)([x, se])
     return x
+
+
+from tensorflow.keras.layers import (
+    Conv2D,
+    BatchNormalization,
+    ReLU,
+    GlobalAveragePooling2D,
+    Dense,
+    Multiply,
+    Reshape,
+    Add,
+)
+from tensorflow.keras import backend as K
+from tensorflow.keras import regularizers
+
+
+def multi_dilated_attention_block(
+    x, filters, kernel_size=3, kernel_regularizer=None, dilation_rates=[1, 2, 4]
+):
+    branches = []
+    for i, rate in enumerate(dilation_rates):
+        b = Conv2D(
+            filters,
+            kernel_size,
+            dilation_rate=rate,
+            padding="same",
+            kernel_initializer="he_normal",
+            kernel_regularizer=regularizers.l2(kernel_regularizer),
+            use_bias=False,
+        )(x)
+        b = BatchNormalization()(b)
+        b = ReLU()(b)
+
+        b = se_block(b, name=f"se_branch_{i}")
+
+        branches.append(b)
+
+    # Context-aware attention weighting
+    avg_pool = GlobalAveragePooling2D()(x)
+    max_pool = GlobalMaxPooling2D()(x)
+    context = keras.layers.Concatenate()([avg_pool, max_pool])
+    attention_weights = Dense(len(branches), activation="softmax")(context)
+
+    weighted_branches = []
+    for i, branch in enumerate(branches):
+        weight = SelectAttentionBranch(i)(attention_weights)
+        weight = Reshape((1, 1, 1))(weight)
+        weighted_branch = Multiply()([branch, weight])
+        weighted_branches.append(weighted_branch)
+
+    output = Add()(weighted_branches)
+    return output
 
 
 def wide_resnet_block(
@@ -406,6 +348,8 @@ def normalize(x, name: str):
     mean = np.float32((max_val + min_val) / 2)
     std = np.float32((max_val - min_val) / 2)
     n_sweeps = x.shape[-1]
+
+    # Use tf.constant directly for faster graph compilation
     mean = tf.constant([mean] * n_sweeps, dtype=tf.float32)
     std = tf.constant([std] * n_sweeps, dtype=tf.float32)
 
@@ -433,9 +377,10 @@ DEFAULT_CONFIG = {
     "t_mul": 2.0,
     "m_mul": 0.9,
     "cycle_restart": 10,
-    "dense_filters": 80,
-    "start_filters": 48,
-    "mid_filters": 48,
+    "attention_dropout": 0.15,
+    "dense_filters": 160,
+    "start_filters": 64,
+    "mid_filters": 128,
     "wN": 1.0,
     "w0": 1.0,
     "w1": 1.0,
@@ -461,6 +406,47 @@ DEFAULT_CONFIG = {
 }
 
 
+def multi_dilated_attention_head(
+    x, dilation_rates=[1, 2, 4], name_prefix="attn", dropout_rate=0.2
+):
+    branches = []
+    for i, rate in enumerate(dilation_rates):
+        attn = Conv2D(
+            1,
+            kernel_size=1,
+            dilation_rate=rate,
+            padding="same",
+            activation="sigmoid",
+            name=f"{name_prefix}_d{rate}",
+        )(x)
+        branches.append(attn)
+
+    # Global context for weighting each attention map
+    avg_pool = GlobalAveragePooling2D()(x)
+    max_pool = GlobalMaxPooling2D()(x)
+    context = keras.layers.Concatenate(name=f"{name_prefix}_context")(
+        [avg_pool, max_pool]
+    )
+
+    # Softmax weights for the attention maps
+    attention_weights = Dense(
+        len(branches), activation="softmax", name=f"{name_prefix}_weights"
+    )(context)
+
+    # Apply learned weights to each attention map
+    weighted_attn_maps = []
+    for i, attn_map in enumerate(branches):
+        weight = SelectAttentionBranch(i)(attention_weights)  # (batch, 1)
+        weight = Reshape((1, 1, 1))(weight)
+        weighted = Multiply(name=f"{name_prefix}_scale_d{i}")([attn_map, weight])
+        weighted_attn_maps.append(weighted)
+
+    fused_attn = Add(name=f"{name_prefix}_fused")(weighted_attn_maps)
+    fused_attn = Dropout(dropout_rate, name=f"{name_prefix}_dropout")(fused_attn)
+
+    return fused_attn
+
+
 def create_fold_expdir(base_expdir, fold):
     fold_expdir = os.path.join(base_expdir, f"fold_{fold}")
     if not os.path.exists(fold_expdir):
@@ -468,7 +454,6 @@ def create_fold_expdir(base_expdir, fold):
     return fold_expdir
 
 
-# Main training function
 def main(config):
     # Gather all hyperparams
     epochs = config.get("epochs")
@@ -502,11 +487,10 @@ def main(config):
     ds_train = get_dataloader(
         dataloader,
         DATA_ROOT,
-        years=train_years,
-        data_type="train",
-        batch_size=batch_size,
-        weights=weights,
-        random_state=SEED,
+        train_years,
+        "train",
+        batch_size,
+        weights,
         **dataloader_kwargs,
     )
     ds_val = get_dataloader(
@@ -519,11 +503,12 @@ def main(config):
         **dataloader_kwargs,
     )
 
-    x, _, _ = next(iter(ds_train))
+    x, _ = next(iter(ds_train))
 
     in_shapes = (120, 240, get_shape(x)[-1])
     c_shapes = (120, 240, x["coordinates"].shape[-1])
     nn = build_model(
+        attention_dropout=config["attention_dropout"],
         shape=in_shapes,
         c_shape=c_shapes,
         start_filters=start_filters,
@@ -540,7 +525,7 @@ def main(config):
     lr = WarmUpCosine(
         base_lr=config["learning_rate"],
         warmup_steps=config["warmup_epochs"] * steps_per_epoch,
-        restart_steps=10 * steps_per_epoch,
+        restart_steps=config["cycle_restart"] * steps_per_epoch,
         t_mul=config["t_mul"],
         m_mul=config["m_mul"],
         alpha=1e-6,
@@ -644,7 +629,6 @@ if __name__ == "__main__":
         import gc
         from tensorflow.keras import backend as K
 
-        # Clear memory after each fold
         K.clear_session()
         gc.collect()
 

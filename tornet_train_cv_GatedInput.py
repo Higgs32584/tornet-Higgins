@@ -63,6 +63,7 @@ class SelectAttentionBranch(tf.keras.layers.Layer):
         # x has shape (batch, num_branches)
         return tf.expand_dims(x[:, self.index], axis=-1)  # shape: (batch, 1)
 
+
 def variable_attention_block(inputs_dict, coords, filters=8):
     attended_vars = []
     # Global pooling of coordinate context
@@ -77,14 +78,17 @@ def variable_attention_block(inputs_dict, coords, filters=8):
 
         # Combine radar and coordinate context
         joint_context = keras.layers.Concatenate()([radar_context, coord_context])
-        dense = Dense(filters, activation='relu')(joint_context)
-        weight = Dense(x.shape[-1],bias_initializer=Constant(5.0),activation='sigmoid')(dense)
+        dense = Dense(filters, activation="relu")(joint_context)
+        weight = Dense(
+            x.shape[-1], bias_initializer=Constant(5.0), activation="sigmoid"
+        )(dense)
         weight = Reshape((1, 1, x.shape[-1]))(weight)
 
         x_att = Multiply()([x, weight])
         attended_vars.append(x_att)
 
     return keras.layers.Concatenate(axis=-1)(attended_vars)
+
 
 class WarmUpCosine(tf.keras.optimizers.schedules.LearningRateSchedule):
     def __init__(
@@ -178,13 +182,11 @@ def build_model(
 
     # Normalize and fill NaNs per variable
     radar_inputs_cleaned = {
-        v: FillNaNs(background_flag)(normalize(inputs[v], v))
-        for v in input_variables
+        v: FillNaNs(background_flag)(normalize(inputs[v], v)) for v in input_variables
     }
     coords = keras.Input(c_shape, name="coordinates")
 
     x = variable_attention_block(radar_inputs_cleaned, coords)
-
 
     if include_range_folded:
         range_folded = keras.Input(shape[:2] + (n_sweeps,), name="range_folded_mask")
@@ -623,6 +625,7 @@ if __name__ == "__main__":
         results.append({"fold": i + 1, **fold_result})
         import gc
         from tensorflow.keras import backend as K
+
         K.clear_session()
         gc.collect()
 

@@ -150,8 +150,9 @@ def main():
         dataloader,
         DATA_ROOT,
         test_years,
-        "test",
-        128,
+        random_state=42,
+        data_type="test",
+        batch_size=128,
         weights={"wN": 1.0, "w0": 1.0, "w1": 1.0, "w2": 1.0, "wW": 1.0},
         select_keys=list(models[0].input.keys()),
     )

@@ -101,7 +101,7 @@ DEFAULT_CONFIG = {
     "epochs": 100,
     "input_variables": ["DBZ", "VEL", "KDP", "ZDR", "RHOHV", "WIDTH"],
     "train_years": [2013, 2014, 2015, 2016, 2017, 2018, 2021, 2022],
-    "val_years": [2019, 2020],
+    "val_years": [2017, 2018],
     "batch_size": 128,
     "dataloader": "tensorflow-tfds",
     "dataloader_kwargs": {
@@ -153,7 +153,7 @@ def main(config, model_path):
     y_pred_prob = []
 
     # Add tqdm progress bar around dataset iteration
-    for x_batch, y_batch, _ in tqdm(ds_val, desc="Predicting"):
+    for x_batch, y_batch in tqdm(ds_val, desc="Predicting"):
         y_true.append(y_batch)
         y_pred_prob.append(
             nn.predict(x_batch, verbose=0)

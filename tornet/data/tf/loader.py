@@ -14,15 +14,14 @@ Delivered to the U.S. Government with Unlimited Rights, as defined in DFARS Part
 Tools for creating tf dataset classes
 """
 import os
-from typing import Dict, List
-
+from typing import List, Dict
 import numpy as np
 import pandas as pd
 import tensorflow as tf
 
-from tornet.data import preprocess as pp
-from tornet.data.constants import ALL_VARIABLES
 from tornet.data.loader import query_catalog, read_file
+from tornet.data.constants import ALL_VARIABLES
+from tornet.data import preprocess as pp
 
 
 def create_tf_dataset(
@@ -142,7 +141,6 @@ def make_tf_loader(
     """
     if from_tfds:  # fast loader
         import tensorflow_datasets as tfds
-
         import tornet.data.tfds.tornet.tornet_dataset_builder  # registers 'tornet'
 
         ds = tfds.load(

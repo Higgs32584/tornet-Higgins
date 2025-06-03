@@ -592,6 +592,7 @@ if __name__ == "__main__":
         results.append({"fold": i + 1, **fold_result})
         import gc
         from tensorflow.keras import backend as K
+
         K.clear_session()
         gc.collect()
 

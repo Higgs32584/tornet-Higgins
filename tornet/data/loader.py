@@ -27,7 +27,7 @@ from tornet.data.constants import ALL_VARIABLES
 
 def read_file(
     f: str,
-    variables: List["str"] = ALL_VARIABLES,
+    variables: List[str] = ALL_VARIABLES,
     n_frames: int = 1,
     tilt_last: bool = True,
 ) -> Dict[str, np.ndarray]:
@@ -204,7 +204,7 @@ def get_dataloader(
     years: list[int],
     data_type: str,
     batch_size: int,
-    random_state:int,
+    random_state: int,
     weights: Dict[str, float] = None,
     **kwargs,
 ):

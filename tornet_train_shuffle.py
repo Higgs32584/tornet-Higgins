@@ -269,7 +269,6 @@ def multi_dilated_attention_block(
     return output
 
 
-
 def wide_resnet_block(
     x,
     filters,
@@ -405,7 +404,11 @@ DEFAULT_CONFIG = {
         ]
     },
 }
-def multi_dilated_attention_head(x, dilation_rates=[1, 2, 4], name_prefix="attn", dropout_rate=0.2):
+
+
+def multi_dilated_attention_head(
+    x, dilation_rates=[1, 2, 4], name_prefix="attn", dropout_rate=0.2
+):
     branches = []
     for i, rate in enumerate(dilation_rates):
         attn = Conv2D(
@@ -414,19 +417,21 @@ def multi_dilated_attention_head(x, dilation_rates=[1, 2, 4], name_prefix="attn"
             dilation_rate=rate,
             padding="same",
             activation="sigmoid",
-            name=f"{name_prefix}_d{rate}"
+            name=f"{name_prefix}_d{rate}",
         )(x)
         branches.append(attn)
 
     # Global context for weighting each attention map
     avg_pool = GlobalAveragePooling2D()(x)
     max_pool = GlobalMaxPooling2D()(x)
-    context = keras.layers.Concatenate(name=f"{name_prefix}_context")([avg_pool, max_pool])
+    context = keras.layers.Concatenate(name=f"{name_prefix}_context")(
+        [avg_pool, max_pool]
+    )
 
-    # Softmax weights for the attention maps
-    attention_weights = Dense(len(branches), activation="softmax", name=f"{name_prefix}_weights")(context)
+    attention_weights = Dense(
+        len(branches), activation="softmax", name=f"{name_prefix}_weights"
+    )(context)
 
-    # Apply learned weights to each attention map
     weighted_attn_maps = []
     for i, attn_map in enumerate(branches):
         weight = SelectAttentionBranch(i)(attention_weights)  # (batch, 1)
@@ -438,6 +443,7 @@ def multi_dilated_attention_head(x, dilation_rates=[1, 2, 4], name_prefix="attn"
     fused_attn = Dropout(dropout_rate, name=f"{name_prefix}_dropout")(fused_attn)
 
     return fused_attn
+
 
 def create_fold_expdir(base_expdir, fold):
     fold_expdir = os.path.join(base_expdir, f"fold_{fold}")
@@ -487,11 +493,9 @@ def main(config):
         **dataloader_kwargs,
     )
 
-    ds_train = (
-        ds_train
-        .shuffle(buffer_size=384, reshuffle_each_iteration=True)
-        .prefetch(tf.data.AUTOTUNE)
-    )
+    ds_train = ds_train.shuffle(
+        buffer_size=384, reshuffle_each_iteration=True
+    ).prefetch(tf.data.AUTOTUNE)
     ds_val = get_dataloader(
         dataloader,
         DATA_ROOT,
@@ -627,6 +631,7 @@ if __name__ == "__main__":
         results.append({"fold": i + 1, **fold_result})
         import gc
         from tensorflow.keras import backend as K
+
         K.clear_session()
         gc.collect()
 
