@@ -6,37 +6,39 @@ This contribution extends the [Tornet benchmark](https://github.com/mit-ll/torne
 
 ## 📌 Overview (Update 6-11-2025)
 
-So this update is a litte bit funky because the validation metrics and the test metrics do not line up. You can look at the validation scores in the hugging face. But bascially what happened was that the cross validation model, normally, where I take the best performing cross validation models on each fold, I ensemble them, and then I go from there. The issue is that the cross validation model, which was fold 1, did superior on cross validation but performed worse than version 8 did. Therefore, I just decided to make a model of v8, which was the ensemble script, v9 which is basically the absolute best performing model for each fold, and then ensemble those two together. I also found there appeared to be inconsistent gains across folds, where marignally better in one fold was slightly worse than another fold. Therefore, I just started saving the absolute best fold and script for each fold, and I made that version 9(which is slightly worse than version 8). I saved the respective script for each of the best folds, but now it is clear that the cross validation is now diverging from the test data.
+So this update is a litte bit funky because the validation metrics and the test metrics do not line up. You can look at the validation scores in the hugging face. But bascially what happened was that the cross validation model, normally, where I take the best performing cross validation models on each fold, I ensemble them, and then I go from there. The issue is that the cross validation model, which was fold 1, did superior on cross validation but performed worse than version 8 did. Therefore, I just decided to make a model of v8, which was the ensemble script, v9 which is basically the absolute best performing model for each fold, and then ensemble those two together. I also found there appeared to be inconsistent gains across folds, where marignally better in one fold was slightly worse than another fold. Therefore, I just started saving the absolute best fold and script for each fold, and I made that version 9(which is slightly worse than version 8). I saved the respective script for each of the best folds, but now it is clear that the cross validation is now diverging from the test data. Given the divergence of Cross Validation and Test Data. 
 
 
 
 
-Overall, a lot of the gain came from three main Factors
 
-## Dilation rates
-Dilation rates proved highly effective in allowing the model to gain a broader context on the actual image. in simpler terms, dilation rates drag the filter over the model to get the broader context of the model.
+Overall, a lot of the gain came from two main factors
+
+## Dilation Rates
+Dilation rates proved highly effective in allowing the model to gain a broader context on the actual image. in simpler terms, dilation rates drag the filter over the model to get the broader context of the model. But we keep the same 3x3 kernel, so we aren't actually doing any more computation. the dilation rate is n-1 pixels between each of the convolutional pixels, so if it is two, there is one pixel between each 3x3 kernel.
+
 ![image](https://github.com/user-attachments/assets/9968e6f3-f980-49b9-903b-208e6ec26a74)
+
+
 ## Spatial Dropout 2D
-Spatial Dropout also proved effective, especially across fold 1. Granted, some folds still respond better with regular dropout.
+Spatial Dropout also proved effective, especially across fold 1. Granted, some folds still respond better with regular dropout. In simpler terms, spatial dropout drops entire channels, so we never botch out random pixels in a feature map.
 ![image](https://github.com/user-attachments/assets/1c4c9c46-42bf-4e6e-8651-45f34c7a9738)
 
+# Possible Future Improvements
 
-
-
-
-# Future Improvements
-
--	Experiment with different dilation rates, or even possibly different kernel sizes
--	Experiment with Dilation rates in the wide Residual Network
--	Experiment with hard or soft gating for the actual code
+-	Experiment with **different dilation rates**, or even possibly **different kernel sizes** we can also look at different stride lengths as well.
+-	Experiment with Multi-dilated Wide Residual Networks, as this may prove to be more effective than regular convolution.
+-	Experiment with hard or soft gating for the actual code for the multi-dilation convolutional code, determine if **SelectAttentionBranch** or the other version is better for prediction
 -	Experiment with the tradeoffs between SpatialDropout2D and Dropout2D
--	Further Parameter tuning might help
+-	Further Parameter Tuning could potentially help
 -	Determine why superior cross validation on training data does not yield a higher score on the test data
 -	Experiment with temporal Modeling to determine what the best course of action is in the future. That is likely where future gains will come from
 -	With the introduction of SpatialDropout2D, the model can go far deeper without losing linear separation. Determine if there is any benefit derived from Going deeper
--	Determine if doubling the parameters is worth it for the actual test performance
 -	Overall, each fold seems to excel largely in vastly different types of scripts at this point, determine why that might possibly be the case.
+-	Experiment with **BinaryFocalCrosssEntropy** vs **BinaryCrossEntropy** as this might hold the key to a more linearly separable dataset.
+-	Experiment with more advanced neural network architectures.
 
+This will probably be my last update for a long time, thank you all.
 
 ---
 
@@ -45,17 +47,19 @@ Spatial Dropout also proved effective, especially across fold 1. Granted, some f
 ## 📊 Evaluation Metrics
 
 ### 📈 Model Comparison Table
-| Model Name         | Threshold | Model parameters | AUC   | AUCPR | BinaryAccuracy | TruePositives | FalsePositives | TrueNegatives | FalseNegatives | Precision | Recall  | FalseAlarmRate | F1    | ThreatScore |
-|--------------------|-----------|------------------|-------|-------|----------------|---------------|----------------|---------------|----------------|-----------|--------|----------------|-------|-------------|
-| baseline           | 0.0101    | 4665409          | 0.8742| 0.5349| 0.9456         | 915           | 635            | 28841         | 1076           | 0.5903    | 0.4596 | 0.4097         | 0.5168| 0.3484      |
-| WRN                | 0.4444    | 229759           | 0.882 | 0.5498| 0.9456         | 973           | 693            | 28783         | 1018           | 0.5840    | 0.4887 | 0.416          | 0.5321| 0.3625      |
-| gated              | 0.5353    | 514905           | 0.8862| 0.5574| 0.9436         | 976           | 761            | 28715         | 1015           | 0.5619    | 0.4902 | 0.4381         | 0.5236| 0.3547      |
-| WRN+Gated          | 0.4898    | 744664           | 0.8928| 0.5705| 0.9474         | 975           | 640            | 28836         | 1016           | 0.6037    | 0.4897 | 0.3963         | 0.5408| 0.3706      |
-| PReLU_textbook     | 0.4242    | 102524           | 0.8976| 0.5853| 0.9481         | 1032          | 673            | 28803         | 959            | 0.6053    | 0.5183 | 0.3947         | 0.5584| 0.3874      |
-| old_ensemble       | 0.3899    | 512620           | 0.9047| 0.5947| 0.9479         | 1020          | 669            | 28807         | 971            | 0.6039    | 0.5123 | 0.3961         | 0.5543| 0.3835      |
-| ensemble_V8TH      | 0.3999    | 1050714          | 0.911 | 0.6179| 0.9497         | **1068**        | 659            | 28817         | **923**            | 0.6184    | **0.5364** | 0.3816         | **0.5745**| **0.403**       |
-| ensemble_v9        | 0.46      | 1379898          | 0.9115| 0.6143| 0.9492         | 1038          | 644            | 28832         | 953            | 0.6171    | 0.5213 | 0.3829         | 0.5652| 0.3939      |
-| ensemble_v8+v9     | 0.4353    | 2430612          | **0.9128**|**0.6195**| **0.9504**        | 1050          | **621**           | **28855**        | 941            | **0.6284**    | 0.5274 | **0.3716**        | 0.5735| 0.402       |
+| Model Name        | Threshold | Model parameters | AUC   | AUCPR  | BinaryAccuracy | TruePositives | FalsePositives | TrueNegatives | FalseNegatives | Precision | Recall | FalseAlarmRate | F1    | ThreatScore |
+|-------------------|-----------|------------------|-------|--------|----------------|---------------|----------------|---------------|----------------|-----------|--------|----------------|-------|-------------|
+| baseline          | 0.0101    | 4665409          | 0.8742 | 0.5349 | 0.9456         | 915           | 635            | 28841         | 1076           | 0.5903    | 0.4596 | 0.4097         | 0.5168 | 0.3484      |
+| WRN               | 0.4444    | 229759           | 0.882  | 0.5498 | 0.9456         | 973           | 693            | 28783         | 1018           | 0.5840    | 0.4887 | 0.416          | 0.5321 | 0.3625      |
+| gated             | 0.5353    | 514905           | 0.8862 | 0.5574 | 0.9436         | 976           | 761            | 28715         | 1015           | 0.5619    | 0.4902 | 0.4381         | 0.5236 | 0.3547      |
+| WRN+Gated         | 0.4898    | 744664           | 0.8928 | 0.5705 | 0.9474         | 975           | 640            | 28836         | 1016           | 0.6037    | 0.4897 | 0.3963         | 0.5408 | 0.3706      |
+| PReLU_textbook    | 0.4242    | 102524           | 0.8976 | 0.5853 | 0.9481         | 1032          | 673            | 28803         | 959            | 0.6053    | 0.5183 | 0.3947         | 0.5584 | 0.3874      |
+| old_ensemble      | 0.3899    | 512620            | 0.9047 | 0.5947 | 0.9479         | 1020          | 669            | 28807         | 971            | 0.6039    | 0.5123 | 0.3961         | 0.5543 | 0.3835      |
+| ensemble_V8TH     | 0.3999    | 1050714          | 0.911  | 0.6179 | 0.9497         | **1068**      | 659            | 28817         | **923**        | 0.6184    | **0.5364** | 0.3816         | **0.5745** | **0.403**       |
+| ensemble_v9       | 0.46      | 1379898          | 0.9115 | 0.6143 | 0.9492         | 1038          | 644            | 28832         | 953            | 0.6171    | 0.5213 | 0.3829         | 0.5652 | 0.3939      |
+| ensemble_v8+v9    | 0.4353    | **2430612**      | **0.9128** | **0.6195** | **0.9504**    | 1050          | **621**        | **28855**     | 941            | **0.6284** | 0.5274 | **0.3716**     | 0.5735 | 0.402       |
+
+
 
 
 ### 📈 Cross-Validation AUCPR
@@ -87,7 +91,9 @@ Spatial Dropout also proved effective, especially across fold 1. Granted, some f
 
 
 **Key Points:**
-- PReLU along with architectural changes
+
+
+
 
 Ensemble models consistently outperform the [baseline](https://huggingface.co/tornet-ml/tornado_detector_baseline_v1) on all major metrics.
 
@@ -96,18 +102,7 @@ Ensemble models consistently outperform the [baseline](https://huggingface.co/to
 ## 📁 File Structure
 
 ### `scripts/tornado_detection/`
-- `train_wide_resnet.py` – Training logic for Wide ResNet (WRN) variants
-- `train_gated_routing.py` – Training logic for Model v6 with learned gating mechanism
-- `test_tornado_keras_batch.py` – Batch evaluation and ensemble inference script
-- `tornet_train_cv_gated.py` – Cross-validation for gated model (AUCPR metric)
-- `tornet_train_cv_wide_resnet.py` – Cross-validation for Wide ResNet model (AUCPR)
-- `tornet_train_cv_baseline.py` – Cross-validation for baseline model (AUCPR)
-### new `scripts/tornado_detection/`
-- `train_textbook.py` – Training logic for new WRN PReLU 
-- `tornet_train_cv_textbook.py` – Cross-validation for new WRN PReLU 
-- `test_tornado_keras_ensemble.py` – Batch evaluation and ensemble for keras files in a particular directory
-
-- Saved `.keras` models – Versioned model checkpoints
+- `foldxx.py` the respective scripts for the best scoring folds overall for each model
 
 ### `visualizations/`
 - Plots showing AUCPR performance, precision-recall tradeoffs, and model architecture comparisons
@@ -115,7 +110,7 @@ Ensemble models consistently outperform the [baseline](https://huggingface.co/to
 
 
 
-
+## If you have any questions feel free to open an issue. Thank you
 
 ## 🧪 Ensemble Evaluation Usage
 Put all .keras in the same file
@@ -126,9 +121,6 @@ python scripts/tornado_detection/test_tornado_keras_ensemble.py \
 ```
 ---
 ## Downloading the Data and set up is the same as [Tornet benchmark](https://github.com/mit-ll/tornet)
-
-## 📷 Sample Visualizations
-![Precision Recall Curve](TEST_AUC_PR_curves.png)
 
 
 ## Citation
