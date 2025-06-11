@@ -18,7 +18,6 @@ TORNET_ROOT = TFDS_DATA_DIR
 import tensorflow_datasets as tfds
 
 import tornet.data.tfds.tornet.tornet_dataset_builder  # registers 'tornet'
-from tornet.models.keras.layers import CoordConv2D
 
 EXP_DIR = "."
 DATA_ROOT = "/home/ubuntu/tfds"
@@ -29,6 +28,17 @@ tf.config.optimizer.set_jit(True)
 
 os.environ["TORNET_ROOT"] = DATA_ROOT
 os.environ["TFDS_DATA_DIR"] = TFDS_DATA_DIR
+
+
+@keras.utils.register_keras_serializable()
+class SelectAttentionBranch(tf.keras.layers.Layer):
+    def __init__(self, index, **kwargs):
+        super().__init__(**kwargs)
+        self.index = index
+
+    def call(self, x):
+        # x has shape (batch, num_branches)
+        return tf.expand_dims(x[:, self.index], axis=-1)  # shape: (batch, 1)
 
 
 @keras.utils.register_keras_serializable()
@@ -83,6 +93,12 @@ class StackAvgMax(tf.keras.layers.Layer):
 
 
 def main():
+    import gc
+    from tensorflow.keras import backend as K
+
+    K.clear_session()
+    gc.collect()
+
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--model_dir",
@@ -144,28 +160,40 @@ def main():
         DATA_ROOT,
         test_years,
         "test",
-        128,
+        batch_size=128,
+        random_state=42,
         weights={"wN": 1.0, "w0": 1.0, "w1": 1.0, "w2": 1.0, "wW": 1.0},
         select_keys=list(models[0].input.keys()),
     )
 
     # Define metrics
     from_logits = False
+    threshold = args.threshold
     metrics = [
         keras.metrics.AUC(from_logits=from_logits, name="AUC", num_thresholds=2000),
         keras.metrics.AUC(
             from_logits=from_logits, curve="PR", name="AUCPR", num_thresholds=2000
         ),
-        tfm.BinaryAccuracy(from_logits, name="BinaryAccuracy"),
-        tfm.TruePositives(from_logits, name="TruePositives"),
-        tfm.FalsePositives(from_logits, name="FalsePositives"),
-        tfm.TrueNegatives(from_logits, name="TrueNegatives"),
-        tfm.FalseNegatives(from_logits, name="FalseNegatives"),
-        tfm.Precision(from_logits, name="Precision"),
-        tfm.Recall(from_logits, name="Recall"),
-        FalseAlarmRate(name="FalseAlarmRate"),
-        tfm.F1Score(from_logits=from_logits, name="F1"),
-        ThreatScore(name="ThreatScore"),
+        tfm.BinaryAccuracy(
+            from_logits=from_logits, threshold=threshold, name="BinaryAccuracy"
+        ),
+        tfm.TruePositives(
+            from_logits=from_logits, thresholds=threshold, name="TruePositives"
+        ),
+        tfm.FalsePositives(
+            from_logits=from_logits, thresholds=threshold, name="FalsePositives"
+        ),
+        tfm.TrueNegatives(
+            from_logits=from_logits, thresholds=threshold, name="TrueNegatives"
+        ),
+        tfm.FalseNegatives(
+            from_logits=from_logits, thresholds=threshold, name="FalseNegatives"
+        ),
+        tfm.Precision(from_logits=from_logits, thresholds=threshold, name="Precision"),
+        tfm.Recall(from_logits=from_logits, thresholds=threshold, name="Recall"),
+        tfm.F1Score(from_logits=from_logits, threshold=threshold, name="F1"),
+        FalseAlarmRate(name="FalseAlarmRate", threshold=threshold),
+        ThreatScore(name="ThreatScore", threshold=threshold),
     ]
 
     # Create a metric tracker
