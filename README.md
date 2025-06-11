@@ -6,7 +6,23 @@ This contribution extends the [Tornet benchmark](https://github.com/mit-ll/torne
 
 ## 📌 Overview (Update 6-11-2025)
 
-So this update is a litte bit funky because the validation metrics and the test metrics do not line up. You can look at the validation scores in the hugging face. But bascially what happened was that the cross validation model, normally, where I take the best performing cross validation models on each fold, I ensemble them, and then I go from there. The issue is that the cross validation model, which was fold 1, did superior on cross validation but performed worse than version 8 did. Therefore, I just decided to make a model of v8, which was the ensemble script, v9 which is basically the absolute best performing model for each fold, and then ensemble those two together. I also found there appeared to be inconsistent gains across folds, where marignally better in one fold was slightly worse than another fold. Therefore, I just started saving the absolute best fold and script for each fold, and I made that version 9(which is slightly worse than version 8). I saved the respective script for each of the best folds, but now it is clear that the cross validation is now diverging from the test data. Given the divergence of Cross Validation and Test Data, I imagine we are possibly getting close to the ceiling? It is hard to tell, but temporal modeling could possibly squeeze a few more points out, but given how inconsistent gains are made now, it is hard to tell. More data may help.
+This update is a bit tricky because the validation metrics and test metrics do not align. You can view the validation scores on Hugging Face.
+
+Here’s what happened: normally, I take the best-performing cross-validation model from each fold, ensemble them, and proceed from there. In this case, the cross-validation model from fold 1 performed best during cross-validation but ended up performing worse than version 8 on the test set.
+
+As a result, I decided to create a new model:
+
+Version 8: the original ensemble script.
+
+Version 9: an ensemble of the absolute best-performing model from each fold.
+
+I also observed that gains across folds were inconsistent — a model that was marginally better in one fold could be slightly worse in another. Because of this, I started saving the absolute best-performing model and script for each fold and used that to create version 9 (which is slightly worse overall than version 8).
+
+I saved the corresponding scripts for each best fold. However, it is now clear that the cross-validation results are starting to diverge from the test set performance.
+
+Given this divergence, I suspect we might be approaching a performance ceiling. It’s hard to say for certain, but temporal modeling might squeeze out a few more points. However, with gains now being inconsistent, it’s difficult to predict. More data could potentially help.
+
+
 
 
 
