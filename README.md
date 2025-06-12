@@ -115,7 +115,8 @@ Ensemble models consistently outperform the [baseline](https://huggingface.co/to
 ## 📁 File Structure
 
 ### `scripts/tornado_detection/`
-- `foldxx.py` the respective scripts for the best scoring folds overall for each model. 
+- `foldxx.py` the respective scripts for the best scoring folds overall for each model.
+- - `notebooks/VisualizeDilations.py` A Script to help visualize the attention maps at different dilations in the model. Depending on the model, the model either learns to hard gate the most promising dilation in each repsective example with **SelectAttentionBranch**, or learns to dynamically emphasize or de-emphasize certain dilations depending on the example. The model computes a global context vector with GlobalAvg+Max. The resulting pooled features are concatenated and passed through small Dense networks to generate gating weights for each branch. These gating weights are applied (via Multiply) to the corresponding dilated branches to modulate their importance dynamically, depending on the input.
 
 ### `visualizations/`
 - Plots showing AUCPR performance, precision-recall tradeoffs, and model architecture comparisons
