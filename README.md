@@ -125,6 +125,12 @@ Ensemble models consistently outperform the [baseline](https://huggingface.co/to
 ![image](https://github.com/user-attachments/assets/afcb42fc-d621-46ea-9bb3-b60b1085b56b)
 - Histogram of the probabilities Predicted on the validation training set of 2013,2014 for fold 1. 
 
+![image](https://github.com/user-attachments/assets/b5028956-1445-4ad9-8813-2f2089b9bfef)
+-  Image of DBZ,VEL,RHOHV, along with three attention maps at dilations 1,2 and 4. the script to generate this map is in VisualizeDilations.ipynb
+-  
+
+
+
 
 ## If you have any questions feel free to open an issue. Thank you
 
