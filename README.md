@@ -108,9 +108,6 @@ This will probably be my last update for a long time, thank you all.
 
 **Key Points:**
 
-
-
-
 Ensemble models consistently outperform the [baseline](https://huggingface.co/tornet-ml/tornado_detector_baseline_v1) on all major metrics.
 
 ---
@@ -118,12 +115,15 @@ Ensemble models consistently outperform the [baseline](https://huggingface.co/to
 ## 📁 File Structure
 
 ### `scripts/tornado_detection/`
-- `foldxx.py` the respective scripts for the best scoring folds overall for each model
+- `foldxx.py` the respective scripts for the best scoring folds overall for each model. 
 
 ### `visualizations/`
 - Plots showing AUCPR performance, precision-recall tradeoffs, and model architecture comparisons
 ![image](https://github.com/user-attachments/assets/b40964ff-37fa-4262-9c85-acb2f172fe1e)
 
+
+![image](https://github.com/user-attachments/assets/afcb42fc-d621-46ea-9bb3-b60b1085b56b)
+- Histogram of the probabilities Predicted on the validation training set of 2013,2014 for fold 1. 
 
 
 ## If you have any questions feel free to open an issue. Thank you
