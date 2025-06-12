@@ -31,7 +31,7 @@ Given this divergence, I suspect we might be approaching a performance ceiling. 
 Overall, a lot of the gain came from two main factors
 
 ## Dilation Rates
-Dilation rates proved highly effective in allowing the model to gain a broader context on the actual image. in simpler terms, dilation rates drag the filter over the model to get the broader context of the model. But we keep the same 3x3 kernel, so we aren't actually doing any more computation. the dilation rate is n-1 pixels between each of the convolutional pixels, so if it is two, there is one pixel between each 3x3 kernel.
+Dilation rates proved highly effective in allowing the model to gain a broader context on the actual image. in simpler terms, dilation rates drag the filter over the model to get the broader context of the model. But we keep the same 3x3 kernel, so we aren't actually doing any more computation. the dilation rate is n-1 pixels between each of the convolutional pixels, so if it is two, there is one pixel between each 3x3 kernel. The Dilaton Rate can be easily set in the parameters of Conv2D.
 
 ![image](https://github.com/user-attachments/assets/9968e6f3-f980-49b9-903b-208e6ec26a74)
 
