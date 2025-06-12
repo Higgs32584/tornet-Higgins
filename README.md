@@ -8,41 +8,39 @@ This contribution extends the [Tornet benchmark](https://github.com/mit-ll/torne
 
 This update is a bit tricky because the validation metrics and test metrics do not align. You can view the validation scores on Hugging Face.
 
-Here’s what happened: normally, I take the best-performing cross-validation model from each fold, ensemble them, and proceed from there. In this case, the cross-validation model from fold 1 performed best during cross-validation but ended up performing worse than version 8 on the test set.
-
+Here’s what happened: normally, I take the best-performing cross-validation model from each fold, ensemble them, and validation usually matches up to a degree with Test. But in this case, I had an average cross validation score of 0.6272, and that translated to a 0.6179 test AUCPR. But, I improved further, on cross val with a score of roughly 0.6357, but the test  AUCPR dropped to 0.60, which is odd. In this case, the cross-validation model from fold 1 performed best during cross-validation but ended up performing worse than version 8 on the test set. Granted, both models still did better than the old ensemble. 
 As a result, I decided to create a new model:
-
 Version 8: the original ensemble script.
-
-Version 9: an ensemble of the absolute best-performing model from each fold.
-
-I also observed that gains across folds were inconsistent — a model that was marginally better in one fold could be slightly worse in another. Because of this, I started saving the absolute best-performing model and script for each fold and used that to create version 9 (which is slightly worse overall than version 8).
-
-I saved the corresponding scripts for each best fold. However, it is now clear that the cross-validation results are starting to diverge from the test set performance.
-
-Given this divergence, I suspect we might be approaching a performance ceiling. It’s hard to say for certain, but temporal modeling might squeeze out a few more points. However, with gains now being inconsistent, it’s difficult to predict. More data could potentially help.
-
-
-
-
-
-
+Version 9: an ensemble of the absolute best-performing model from each fold, compiled from the various tweaks and expirements from various models, each of the best scripts for each fold are marked accordingly in the scripts.
+I saved the corresponding scripts for each best fold. However, it is now clear that the cross-validation results are starting to diverge from the test set performance, for reasons I am currently unsure of.
+Given this divergence, I could very well be approaching a performance ceiling. It’s hard to say for certain, but temporal modeling could likely squeeze out a few more points.
 
 Overall, a lot of the gain came from two main factors
 
 ## Dilation Rates
-Dilation rates proved highly effective in allowing the model to gain a broader context on the actual image. in simpler terms, dilation rates drag the filter over the model to get the broader context of the model. But we keep the same 3x3 kernel, so we aren't actually doing any more computation. the dilation rate is n-1 pixels between each of the convolutional pixels, so if it is two, there is one pixel between each 3x3 kernel. The Dilaton Rate can be easily set in the parameters of Conv2D.
+Dilation rates proved highly effective in allowing the model to gain a broader context on the actual image. in simpler terms, dilation rates drag the filter over the model to get the broader context of the model. But we keep the same 3x3 kernel, so we aren't actually doing any more computation. the dilation rate is n-1 pixels between each of the convolutional pixels, so if it is two, there is one pixel between each 3x3 kernel. The Dilaton Rate can be easily set in the parameters of Conv2D. The multi-level dilation rates, especially at the convolutional block and the attention map, proved invaluable at improving performance further in both Test and Validation without a doubt. Regardless of the method of combination, it tends to do better on both test and validation over old_ensemble, but the question of Dynamic Weighting, Hard Gating, or simply concatenation remains to be fully seen.
 
 ![image](https://github.com/user-attachments/assets/9968e6f3-f980-49b9-903b-208e6ec26a74)
 
 
 ## Spatial Dropout 2D
-Spatial Dropout also proved effective, especially across fold 1. Granted, some folds still respond better with regular dropout. In simpler terms, spatial dropout drops entire channels, so we never botch out random pixels in a feature map.
+Spatial Dropout also proved effective, especially across fold 1. Granted, some folds still respond better with regular dropout. In simpler terms, spatial dropout drops entire channels, so we never botch out random pixels in a feature map. This likely prevented us previously from getting past one layer on the WRN. Spatial Dropout allows us to maintain spatial variance in deeper layers.
 ![image](https://github.com/user-attachments/assets/1c4c9c46-42bf-4e6e-8651-45f34c7a9738)
 
 # Possible Future Improvements
 
 -	Experiment with **different dilation rates**, or even possibly **different kernel sizes** we can also look at different stride lengths as well.
+There are several more advanced CNN and Transformer architectures beyond Wide Residual Networks (WRNs). To name a few currently in use: ResNeXt (2017), DenseNet (2017), EfficientNet (2019), HRNet (2019), ResNet-D (2019), RegNet (2020), ResNeSt (2020), and ConvNeXtV2 (2023). In the Transformer space, there are many options as well, such as Swin Transformer (2021), MaxViT (2022), Vision Transformer (2020), CoAtNet (2022), InternImage (2023), and Restormer (2022).
+
+I experimented with some of these architectures. U-Net was the only one that performed competitively right out of the box, although it comes with its own challenges—such as handling buffer overflows and managing the white padding patches that need to be added. I also tried ResNeXt, ConvNeXt, and HRNet, though not in great depth. I haven't explored the other ResNet variants or Transformers yet.
+
+That said, I certainly don’t want to discourage anyone from exploring different neural network architectures. In my case, many of the models I tested were essentially drop-in replacements for my existing architecture, which was optimized for WRN. U-Net was the exception, as it required a complete architectural rework. It's quite possible that with more dedicated tuning and effort, these modern architectures could yield better results. Achieving that level of performance likely demands a sustained effort—similar to the process I went through when optimizing ResNet initially.
+
+- I tried dropping in backbones from https://keras.io/api/applications/ , but none appeared to show any significant promise likely because they are too deep, and overfit to. I
+
+
+
+-	Experiment with standalone attention map multi-dilation or standalone convolutional block multi-dilation 
 -	Experiment with Multi-dilated Wide Residual Networks, as this may prove to be more effective than regular convolution.
 -	Experiment with hard or soft gating for the actual code for the multi-dilation convolutional code, determine if **SelectAttentionBranch** or the other version is better for prediction
 -	Experiment with the tradeoffs between SpatialDropout2D and Dropout2D
