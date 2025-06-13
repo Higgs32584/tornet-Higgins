@@ -31,6 +31,17 @@ os.environ["TFDS_DATA_DIR"] = TFDS_DATA_DIR
 
 
 @keras.utils.register_keras_serializable()
+class SelectAttentionBranch(tf.keras.layers.Layer):
+    def __init__(self, index, **kwargs):
+        super().__init__(**kwargs)
+        self.index = index
+
+    def call(self, x):
+        # x has shape (batch, num_branches)
+        return tf.expand_dims(x[:, self.index], axis=-1)  # shape: (batch, 1)
+
+
+@keras.utils.register_keras_serializable()
 class FillNaNs(keras.layers.Layer):
     def __init__(self, fill_val, **kwargs):
         super().__init__(**kwargs)
@@ -149,7 +160,8 @@ def main():
         DATA_ROOT,
         test_years,
         "test",
-        32,
+        batch_size=128,
+        random_state=42,
         weights={"wN": 1.0, "w0": 1.0, "w1": 1.0, "w2": 1.0, "wW": 1.0},
         select_keys=list(models[0].input.keys()),
     )

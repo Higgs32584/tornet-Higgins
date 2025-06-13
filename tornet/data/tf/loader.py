@@ -188,7 +188,7 @@ def preproc(
 
     # Add sample weights
     if weights:
-        ds = ds.map(lambda x, y: pp.compute_sample_weight(x, y, **weights, backend=tf))
+        ds = ds.map(lambda x, y: pp.compute_sample_weight_tf(x, y, **weights))
 
         # select keys for input
         if select_keys is not None:

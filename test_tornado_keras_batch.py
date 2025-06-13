@@ -19,11 +19,9 @@ import tensorflow_datasets as tfds
 
 import tornet.data.tfds.tornet.tornet_dataset_builder  # registers 'tornet'
 
-EXP_DIR = "."
-DATA_ROOT = "/home/ubuntu/tfds"
+# Removed duplicate definition of EXP_DIR
+DATA_ROOT = TFDS_DATA_DIR
 TORNET_ROOT = DATA_ROOT
-DATA_ROOT = "/home/ubuntu/tfds"
-TFDS_DATA_DIR = "/home/ubuntu/tfds"
 tf.config.optimizer.set_jit(True)
 
 os.environ["TORNET_ROOT"] = DATA_ROOT
@@ -130,7 +128,6 @@ def main():
         "StackAvgMax": StackAvgMax,
         "FalseAlarmRate": FalseAlarmRate,
         "ThreatScore": ThreatScore,
-        # Optional: Add WarmUpCosine if used in learning rate schedule
     }
     model_paths = args.model_paths
     models = []

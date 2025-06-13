@@ -46,18 +46,6 @@ class FillNaNs(tf.keras.layers.Layer):
 
 
 @keras.utils.register_keras_serializable()
-class ExpandDimsTwice(keras.layers.Layer):
-    def call(self, inputs):
-        return tf.expand_dims(tf.expand_dims(inputs, axis=1), axis=1)
-
-
-@keras.utils.register_keras_serializable()
-class StackAvgMax(tf.keras.layers.Layer):
-    def call(self, inputs):
-        return tf.stack(inputs, axis=1)
-
-
-@keras.utils.register_keras_serializable()
 class FastNormalize(keras.layers.Layer):
     def __init__(self, mean, std, **kwargs):
         super().__init__(**kwargs)
@@ -94,14 +82,14 @@ class SelectAttentionBranch(tf.keras.layers.Layer):
 
     def call(self, x):
         # x has shape (batch, num_branches)
-        return tf.expand_dims(x[:, self.index], axis=-1)
+        return tf.expand_dims(x[:, self.index], axis=-1)  # shape: (batch, 1)
 
 
 DEFAULT_CONFIG = {
     "epochs": 100,
     "input_variables": ["DBZ", "VEL", "KDP", "ZDR", "RHOHV", "WIDTH"],
     "train_years": [2013, 2014, 2015, 2016, 2017, 2018, 2021, 2022],
-    "val_years": [2017, 2018],
+    "val_years": [2021, 2022],
     "batch_size": 128,
     "dataloader": "tensorflow-tfds",
     "dataloader_kwargs": {

@@ -29,16 +29,16 @@ class FillNaNs(keras.layers.Layer):
         return tf.where(tf.math.is_nan(x), self.fill_val, x)
 
 
-@keras.utils.register_keras_serializable()
-class ExpandDimsTwice(keras.layers.Layer):
-    def call(self, inputs):
-        return tf.expand_dims(tf.expand_dims(inputs, axis=1), axis=1)
+# @keras.utils.register_keras_serializable()
+# class ExpandDimsTwice(keras.layers.Layer):
+#     def call(self, inputs):
+#         return tf.expand_dims(tf.expand_dims(inputs, axis=1), axis=1)
 
 
-@keras.utils.register_keras_serializable()
-class StackAvgMax(tf.keras.layers.Layer):
-    def call(self, inputs):
-        return tf.stack(inputs, axis=1)
+# @keras.utils.register_keras_serializable()
+# class StackAvgMax(tf.keras.layers.Layer):
+#     def call(self, inputs):
+#         return tf.stack(inputs, axis=1)
 
 
 @keras.utils.register_keras_serializable()

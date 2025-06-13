@@ -10,7 +10,6 @@ from tensorflow import keras
 from tensorflow.keras.layers import (
     Add,
     BatchNormalization,
-    LayerNormalization,
     Conv2D,
     Dense,
     SpatialDropout2D,
@@ -23,6 +22,7 @@ from tensorflow.keras.layers import (
     ReLU,
     Reshape,
 )
+from tensorflow.keras.applications import DenseNet121, EfficientNetV2S, ResNet50V2
 import tensorflow as tf
 import numpy as np
 import tornet.data.tfds.tornet.tornet_dataset_builder
@@ -31,10 +31,9 @@ from tornet.data.loader import get_dataloader
 from tornet.data.preprocess import get_shape
 from tornet.metrics.keras import metrics as tfm
 from tornet.utils.general import make_exp_dir
-from tensorflow.keras.regularizers import l2
 
 logging.basicConfig(level=logging.ERROR)
-SEED = 243
+SEED = 1002
 # Set random seeds for reproducibility
 os.environ["PYTHONHASHSEED"] = str(SEED)
 random.seed(SEED)
@@ -160,6 +159,7 @@ def build_model(
             l2_reg=l2_reg,
             drop_rate=dropout_rate,
         )
+
     x = se_block(x, kernel_initializer=GLOROT_INIT)
     x = multi_dilated_attention_block(
         x,
@@ -286,7 +286,6 @@ def normalize(x, name: str):
     std = np.float32((max_val - min_val) / 2)
     n_sweeps = x.shape[-1]
 
-    # Use tf.constant directly for faster graph compilation
     mean = tf.constant([mean] * n_sweeps, dtype=tf.float32)
     std = tf.constant([std] * n_sweeps, dtype=tf.float32)
 
@@ -315,9 +314,9 @@ DEFAULT_CONFIG = {
     "m_mul": 0.9,
     "cycle_restart": 10,
     "early_stopping_patience": 5,
-    "dense_filters": 128,
+    "dense_filters": 192,
     "start_filters": 48,
-    "mid_filters": 64,
+    "mid_filters": 128,
     "wN": 1.0,
     "w0": 1.0,
     "w1": 1.0,
@@ -343,7 +342,9 @@ DEFAULT_CONFIG = {
 }
 
 
-def multi_dilated_attention_head(x, dilation_rates=[1, 2, 4], name_prefix="attn"):
+def multi_dilated_attention_head(
+    x, dilation_rates=[1, 2, 4, 8, 16], name_prefix="attn"
+):
     branches = []
     for i, rate in enumerate(dilation_rates):
         attn = Conv2D(
@@ -384,7 +385,7 @@ def multi_dilated_attention_block(
     filters,
     kernel_size=3,
     kernel_regularizer=None,
-    dilation_rates=[1, 2, 4],
+    dilation_rates=[1, 2, 4, 8, 16],
     name_prefix="mdab",
 ):
     branches = []
@@ -475,6 +476,7 @@ def main(config):
         random_state=SEED,
         **dataloader_kwargs,
     )
+
     ds_val = get_dataloader(
         dataloader,
         DATA_ROOT,
@@ -573,7 +575,6 @@ def main(config):
     return {"aucpr": best_aucpr}
 
 
-# Cross-validation loop
 if __name__ == "__main__":
     config = DEFAULT_CONFIG
     if len(sys.argv) > 1:
@@ -582,39 +583,39 @@ if __name__ == "__main__":
     # Define CV folds
     folds = [
         {
-            "train_years": [2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022],
-            "val_years": [2013, 2014],
-        },
-        {
-            "train_years": [2013, 2014, 2017, 2018, 2019, 2020, 2021, 2022],
-            "val_years": [2015, 2016],
+            "train_years": [2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020],
+            "val_years": [2021, 2022],
         },
         {
             "train_years": [2013, 2014, 2015, 2016, 2019, 2020, 2021, 2022],
             "val_years": [2017, 2018],
         },
         {
+            "train_years": [2013, 2014, 2017, 2018, 2019, 2020, 2021, 2022],
+            "val_years": [2015, 2016],
+        },
+        {
             "train_years": [2013, 2014, 2015, 2016, 2017, 2018, 2021, 2022],
             "val_years": [2019, 2020],
         },
         {
-            "train_years": [2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020],
-            "val_years": [2021, 2022],
+            "train_years": [2015, 2016, 2017, 2018, 2019, 2020, 2021, 2022],
+            "val_years": [2013, 2014],
         },
     ]
 
+    newer_folds = [5, 3, 2, 4, 1]
     results = []
-
     for i, fold in enumerate(folds):
         print(
-            f"\n================ Fold {i + 1}: Train {fold['train_years']} | Test {fold['val_years']} ================\n"
+            f"\n================ Fold {newer_folds[i]}: Train {fold['train_years']} | Test {fold['val_years']} ================\n"
         )
         fold_config = config.copy()
         fold_config["train_years"] = fold["train_years"]
         fold_config["val_years"] = fold["val_years"]
-        fold_config["fold"] = i + 1  # Pass fold number here
+        fold_config["fold"] = newer_folds[i]
         fold_result = main(fold_config)
-        results.append({"fold": i + 1, **fold_result})
+        results.append({"fold": results[i], **fold_result})
         from tensorflow.keras import backend as K
 
         K.clear_session()

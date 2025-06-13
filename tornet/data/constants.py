@@ -17,7 +17,7 @@ Constants related to dataset
 import numpy as np
 
 # List all potential input variables
-ALL_VARIABLES = ["DBZ", "VEL", "KDP", "RHOHV", "ZDR", "WIDTH"]
+ALL_VARIABLES = ["DBZ", "VEL", "KDP", "RHOHV", "ZDR", "WIDTH", "az_shear"]
 
 # Provides a typical min-max range for each variable (but not exact)
 # Used for normalizing in a NN
@@ -28,4 +28,5 @@ CHANNEL_MIN_MAX = {
     "RHOHV": [0.2, 1.04],
     "ZDR": [-1.0, 8.0],
     "WIDTH": [0.0, 9.0],
+    "az_shear": [-20.0, 20.0],
 }

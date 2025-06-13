@@ -11,10 +11,9 @@ Delivered to the U.S. Government with Unlimited Rights, as defined in DFARS Part
 """
 
 from typing import Dict, List
-
 import numpy as np
-
 from tornet.data.constants import ALL_VARIABLES
+import tensorflow as tf
 
 
 def get_shape(d):
@@ -135,27 +134,18 @@ def split_x_y(d: Dict[str, np.ndarray]):
     return d, y
 
 
-def compute_sample_weight(x, y, wN=1.0, w0=1.0, w1=1.0, w2=1.0, wW=0.5, backend=np):
-    """
-    Assigns sample weights to samples in x,y based on
-    ef_number of tornado
-
-    category,  weight
-    -----------
-    random      wN
-    warnings    wW
-    0           w0
-    1           w1
-    2+          w2
-    """
-    weights = backend.ones_like(y, dtype=float)
+def compute_sample_weight_tf(x, y, wN=1.0, w0=1.0, w1=1.0, w2=1.0, wW=0.5):
+    weights = tf.ones_like(y, dtype=tf.float32)
     ef = x["ef_number"]
-    warn = x["category"] == 2  # warnings
+    warn = tf.equal(x["category"], 2)
 
-    weights = backend.where(ef == -1, wN, weights)  # set all nulls to wN
-    weights = backend.where(warn, wW, weights)  # set warns to wW
-    weights = backend.where(ef == 0, w0, weights)
-    weights = backend.where(ef == 1, w1, weights)
-    weights = backend.where(ef > 1, w2, weights)
+    def fill(val):
+        return tf.fill(tf.shape(weights), tf.cast(val, tf.float32))
+
+    weights = tf.where(tf.equal(ef, -1), fill(wN), weights)
+    weights = tf.where(warn, fill(wW), weights)
+    weights = tf.where(tf.equal(ef, 0), fill(w0), weights)
+    weights = tf.where(tf.equal(ef, 1), fill(w1), weights)
+    weights = tf.where(ef > 1, fill(w2), weights)
 
     return x, y, weights

@@ -40,6 +40,17 @@ class FillNaNs(keras.layers.Layer):
 
 
 @keras.utils.register_keras_serializable()
+class SelectAttentionBranch(tf.keras.layers.Layer):
+    def __init__(self, index, **kwargs):
+        super().__init__(**kwargs)
+        self.index = index
+
+    def call(self, x):
+        # x has shape (batch, num_branches)
+        return tf.expand_dims(x[:, self.index], axis=-1)  # shape: (batch, 1)
+
+
+@keras.utils.register_keras_serializable()
 class FastNormalize(keras.layers.Layer):
     def __init__(self, mean, std, **kwargs):
         super().__init__(**kwargs)
@@ -72,7 +83,10 @@ class StackAvgMax(keras.layers.Layer):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
-        "--model_paths", nargs="+", required=True, help="Paths to .keras model files"
+        "--model_dir",
+        type=str,
+        required=True,
+        help="Directory containing .keras model files",
     )
     parser.add_argument(
         "--output_csv", type=str, default=None, help="Output CSV path for PR curve"
@@ -85,7 +99,18 @@ def main():
     )
     args = parser.parse_args()
 
-    model_paths = args.model_paths
+    # Load model paths from directory
+    model_dir = args.model_dir
+    model_paths = sorted(
+        [
+            os.path.join(model_dir, f)
+            for f in os.listdir(model_dir)
+            if f.endswith(".keras")
+        ]
+    )
+    if not model_paths:
+        raise RuntimeError(f"No .keras model files found in {model_dir}")
+
     model_names = [os.path.splitext(os.path.basename(p))[0] for p in model_paths]
 
     if args.output_csv:
@@ -95,8 +120,8 @@ def main():
         joined_name = "_".join(model_names)
         output_csv = os.path.join("pr_curves", f"ensemble_{joined_name}.csv")
 
-    logging.info("Loading test data...")
-    model_paths = args.model_paths
+    logging.info(f"Found {len(model_paths)} model files in {model_dir}")
+    logging.info("Loading models...")
     models = []
     for path in model_paths:
         model = tf.keras.models.load_model(
@@ -107,20 +132,26 @@ def main():
         models.append(model)
         logging.info(f"Loaded model from: {path}")
 
+    # (Rest of your script continues unchanged here — load data, run predictions, save PR curve)
+
     # Set up data loader
     test_years = range(2013, 2023)
     ds_test = get_dataloader(
         args.dataloader,
         DATA_ROOT,
-        test_years,
-        "test",
-        128,
+        random_state=42,
+        years=test_years,
+        data_type="test",
+        batch_size=128,
         weights={"wN": 1.0, "w0": 1.0, "w1": 1.0, "w2": 1.0, "wW": 1.0},
         select_keys=list(models[0].input.keys()),
     )
 
     y_true_all = []
     y_score_all = []
+    predict_fns = [
+        tf.function(m.predict_on_batch, reduce_retracing=True) for m in models
+    ]
 
     for batch in tqdm.tqdm(ds_test):
         inputs, labels, _ = batch
