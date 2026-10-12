@@ -602,18 +602,18 @@ if __name__ == "__main__":
         },
     ]
 
-    results = [5, 3, 2, 4, 1]
-    newer_folds = []
-    for i, fold in enumerate(folds):
+    fold_ids = [5, 3, 2, 4, 1]
+    results = []
+    for fold_id, fold in zip(fold_ids, folds):
         print(
-            f"\n================ Fold {newer_folds[i]}: Train {fold['train_years']} | Test {fold['val_years']} ================\n"
+            f"\n================ Fold {fold_id}: Train {fold['train_years']} | Test {fold['val_years']} ================\n"
         )
         fold_config = config.copy()
         fold_config["train_years"] = fold["train_years"]
         fold_config["val_years"] = fold["val_years"]
-        fold_config["fold"] = results[i]
+        fold_config["fold"] = fold_id
         fold_result = main(fold_config)
-        results.append({"fold": results[i], **fold_result})
+        results.append({"fold": fold_id, **fold_result})
         from tensorflow.keras import backend as K
 
         K.clear_session()
