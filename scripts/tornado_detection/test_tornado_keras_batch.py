@@ -9,9 +9,8 @@ from tornet.data.loader import get_dataloader
 from tornet.metrics.keras import metrics as tfm
 
 logging.basicConfig(level=logging.INFO)
-from custom_func import FalseAlarmRate, ThreatScore
-
 import tensorflow_datasets as tfds
+from custom_func import FalseAlarmRate, ThreatScore
 
 import tornet.data.tfds.tornet.tornet_dataset_builder  # registers 'tornet'
 
@@ -187,7 +186,6 @@ def main():
     import tqdm
 
     for batch in tqdm.tqdm(ds_test):
-
         inputs, labels, weights = batch
         # Collect predictions from all models
         preds = [model.predict_on_batch(inputs) for model in models]

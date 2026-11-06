@@ -1,0 +1,15 @@
+# Tool configuration only. Packaging is still handled by setup.py.
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+# Notebooks keep their outputs untouched; format them by hand if desired.
+extend-exclude = ["notebooks"]
+
+[tool.ruff.lint]
+# Import sorting only for now. Formatting is done by `ruff format`.
+# Widen this (e.g. "F", "E", "B") once the scripts are cleaned up.
+select = ["I"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["tornet"]

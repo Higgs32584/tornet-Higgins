@@ -21,10 +21,14 @@ import unittest
 
 import keras
 import pandas as pd
+import pytest
 import xarray as xr
 
 if "TORNET_ROOT" not in os.environ:
-    raise RuntimeError("TORNET_ROOT must be defined for unit tests")
+    pytest.skip(
+        "TORNET_ROOT is not set; skipping tests that need the TorNet dataset",
+        allow_module_level=True,
+    )
 DATA_ROOT = os.environ["TORNET_ROOT"]
 
 try:

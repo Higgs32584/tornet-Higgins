@@ -237,9 +237,9 @@ def get_dataloader(
 
     # Convert string to lower case
     dataloader = dataloader.lower()
-    assert (
-        dataloader in valid_dataloaders
-    ), f"dataloader must be in {valid_dataloaders}!"
+    assert dataloader in valid_dataloaders, (
+        f"dataloader must be in {valid_dataloaders}!"
+    )
 
     from_tfds = False
     if "tfds" in dataloader:
