@@ -11,17 +11,14 @@ from tornet.metrics.keras import metrics as tfm
 logging.basicConfig(level=logging.INFO)
 from custom_func import FalseAlarmRate, ThreatScore
 
-TFDS_DATA_DIR = "/home/ubuntu/tfds"
-EXP_DIR = os.environ.get("EXP_DIR", ".")
-TORNET_ROOT = TFDS_DATA_DIR
-# TFDS_DATA_DIR=os.environ['TFDS_DATA_DIR']
 import tensorflow_datasets as tfds
 
 import tornet.data.tfds.tornet.tornet_dataset_builder  # registers 'tornet'
 
-# Removed duplicate definition of EXP_DIR
-DATA_ROOT = TFDS_DATA_DIR
+EXP_DIR = os.environ.get("EXP_DIR", ".")
+DATA_ROOT = os.environ.get("DATA_ROOT", "/home/ubuntu/tfds")
 TORNET_ROOT = DATA_ROOT
+TFDS_DATA_DIR = DATA_ROOT
 tf.config.optimizer.set_jit(True)
 
 os.environ["TORNET_ROOT"] = DATA_ROOT

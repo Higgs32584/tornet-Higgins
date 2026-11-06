@@ -116,7 +116,7 @@ Ensemble models consistently outperform the [baseline](https://huggingface.co/to
 
 ### `scripts/tornado_detection/`
 - `foldxx.py` the respective scripts for the best scoring folds overall for each model.
-- - `notebooks/VisualizeDilations.py` A Script to help visualize the attention maps at different dilations in the model. Depending on the model, the model either learns to hard gate the most promising dilation in each repsective example with **SelectAttentionBranch**, or learns to dynamically emphasize or de-emphasize certain dilations depending on the example. The model computes a global context vector with GlobalAvg+Max. The resulting pooled features are concatenated and passed through small Dense networks to generate gating weights for each branch. These gating weights are applied (via Multiply) to the corresponding dilated branches to modulate their importance dynamically, depending on the input.
+- `notebooks/VisualizeDilations.ipynb` A notebook to help visualize the attention maps at different dilations in the model. Depending on the model, the model either learns to hard gate the most promising dilation in each repsective example with **SelectAttentionBranch**, or learns to dynamically emphasize or de-emphasize certain dilations depending on the example. The model computes a global context vector with GlobalAvg+Max. The resulting pooled features are concatenated and passed through small Dense networks to generate gating weights for each branch. These gating weights are applied (via Multiply) to the corresponding dilated branches to modulate their importance dynamically, depending on the input.
 
 ### `visualizations/`
 - Plots showing AUCPR performance, precision-recall tradeoffs, and model architecture comparisons
@@ -136,9 +136,9 @@ Ensemble models consistently outperform the [baseline](https://huggingface.co/to
 ## If you have any questions feel free to open an issue. Thank you
 
 ## 🧪 Ensemble Evaluation Usage
-Put all .keras in the same file
+Put all .keras files in the same directory. Scripts read the dataset location from `DATA_ROOT` (default `/home/ubuntu/tfds`).
 ```bash
-python scripts/tornado_detection/test_tornado_keras_ensemble.py \
+DATA_ROOT=/path/to/tfds python scripts/tornado_detection/test_tornado_keras_ensemble.py \
   --model_dir MODEL_DIR_PATH \
   --threshold THRESHOLD
 ```

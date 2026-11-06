@@ -1,10 +1,49 @@
+# Python
 __pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+.conda/
+
+# Tooling caches
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# Jupyter
 .ipynb_checkpoints/
-*.ipynb
-*log-*
-*.egg-info
+
+# Editors / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db
+
+# Secrets
+.env
+
+# Training outputs and model artifacts (host large files on Hugging Face)
 experiments/
 lightning_logs/
+logs/
+wandb/
+checkpoints/
+*log-*
+*.keras
+*.h5
+*.SavedModel/
 tornado_baseline*
 tornet_baseline*
-*.keras
+
+# Local dataset copies
+/tfds/
