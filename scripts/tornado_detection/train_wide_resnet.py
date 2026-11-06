@@ -164,9 +164,7 @@ def build_model(
     x = ReLU()(x)
     attention_map = Conv2D(
         1, 1, activation="sigmoid", name="attention_map", use_bias=False
-    )(
-        x
-    )  # shape (B, H, W, 1)
+    )(x)  # shape (B, H, W, 1)
     attention_map = Dropout(rate=0.2, name="attention_dropout")(attention_map)
     x_weighted = Multiply()([x, attention_map])
 

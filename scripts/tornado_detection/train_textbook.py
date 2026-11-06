@@ -276,7 +276,7 @@ if gpus:
 DEFAULT_CONFIG = {
     "epochs": 100,
     "input_variables": ["DBZ", "VEL", "KDP", "ZDR", "RHOHV", "WIDTH"],
-    "train_years": [2013, 2014, 2015, 2016, 2017, 2018,2019,2020],
+    "train_years": [2013, 2014, 2015, 2016, 2017, 2018, 2019, 2020],
     "val_years": [2021, 2022],
     "batch_size": 128,
     "start_filters": 48,

@@ -9,6 +9,7 @@ from typing import List, Tuple
 import numpy as np
 import tensorflow as tf
 import tensorflow_datasets as tfds
+from custom_func import FalseAlarmRate, ThreatScore
 from tensorflow import keras
 from tensorflow.keras.layers import (
     Add,
@@ -27,7 +28,6 @@ from tensorflow.keras.optimizers import AdamW
 from tensorflow.keras.optimizers.schedules import CosineDecayRestarts
 
 import tornet.data.tfds.tornet.tornet_dataset_builder
-from custom_func import FalseAlarmRate, ThreatScore
 from tornet.data import preprocess as pp
 from tornet.data.constants import ALL_VARIABLES, CHANNEL_MIN_MAX
 from tornet.data.loader import get_dataloader
@@ -452,7 +452,7 @@ if __name__ == "__main__":
         fold_config = config.copy()
         fold_config["train_years"] = fold["train_years"]
         fold_config["val_years"] = fold["val_years"]
-        fold_config["exp_name"] = f"{config['exp_name']}_fold{i+1}"
+        fold_config["exp_name"] = f"{config['exp_name']}_fold{i + 1}"
         fold_result = main(fold_config)
         results.append({"fold": i + 1, **fold_result})
 

@@ -24,24 +24,26 @@ import os
 import tensorflow_datasets as tfds
 import tornet.data.tfds.tornet.tornet_dataset_builder
 
-TORNET_ROOT=os.environ['TORNET_ROOT'] # where tornet files live
-TFDS_DATA_DIR=os.environ['TFDS_DATA_DIR'] # where tfds data is to be rewritten
+TORNET_ROOT = os.environ["TORNET_ROOT"]  # where tornet files live
+TFDS_DATA_DIR = os.environ["TFDS_DATA_DIR"]  # where tfds data is to be rewritten
 
-dl_config=tfds.download.DownloadConfig(manual_dir=TORNET_ROOT)
-tfds.data_source('tornet',
-                data_dir=TFDS_DATA_DIR,
-                builder_kwargs={'file_format':'array_record'},
-                download_and_prepare_kwargs={'download_config':dl_config})
+dl_config = tfds.download.DownloadConfig(manual_dir=TORNET_ROOT)
+tfds.data_source(
+    "tornet",
+    data_dir=TFDS_DATA_DIR,
+    builder_kwargs={"file_format": "array_record"},
+    download_and_prepare_kwargs={"download_config": dl_config},
+)
 ```
 
 The following shows how to use the data at runtime.  This requires `TFDS_DATA_DIR` to be set.
 
 ```python
 import tensorflow_datasets as tfds
-import tornet.data.tfds.tornet.tornet_dataset_builder # registers 'tornet'
+import tornet.data.tfds.tornet.tornet_dataset_builder  # registers 'tornet'
 
-ds = tfds.data_source('tornet')
-d = ds['train-2015'][5] # grab a sample
+ds = tfds.data_source("tornet")
+d = ds["train-2015"][5]  # grab a sample
 ```
 
 ## For `tfrecord`
@@ -54,21 +56,19 @@ import os
 import tensorflow_datasets as tfds
 import tornet.data.tfds.tornet.tornet_dataset_builder
 
-TORNET_ROOT=os.environ['TORNET_ROOT'] # where tornet files live
-TFDS_DATA_DIR=os.environ['TFDS_DATA_DIR'] # where tfds data is to be rewritten
+TORNET_ROOT = os.environ["TORNET_ROOT"]  # where tornet files live
+TFDS_DATA_DIR = os.environ["TFDS_DATA_DIR"]  # where tfds data is to be rewritten
 
-dl_config=tfds.download.DownloadConfig(manual_dir=TORNET_ROOT)
-builder = tfds.builder('tornet',
-                       data_dir=TFDS_DATA_DIR,
-                       **{'file_format':'tfrecord'})
-builder.download_and_prepare(**{'download_config':dl_config})
+dl_config = tfds.download.DownloadConfig(manual_dir=TORNET_ROOT)
+builder = tfds.builder("tornet", data_dir=TFDS_DATA_DIR, **{"file_format": "tfrecord"})
+builder.download_and_prepare(**{"download_config": dl_config})
 ```
 
 To use at runtime,
 
 ```python
 import tensorflow_datasets as tfds
-import tornet.data.tfds.tornet.tornet_dataset_builder # registers 'tornet'
+import tornet.data.tfds.tornet.tornet_dataset_builder  # registers 'tornet'
 
-ds = tfds.load('tornet',splits=['train-2013','train-2014'])
+ds = tfds.load("tornet", splits=["train-2013", "train-2014"])
 ```

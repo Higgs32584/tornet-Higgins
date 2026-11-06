@@ -12,6 +12,7 @@ repos:
     rev: v6.0.0
     hooks:
       - id: trailing-whitespace
+        args: [--markdown-linebreak-ext=md]
         exclude: \.ipynb$
       - id: end-of-file-fixer
         exclude: \.ipynb$

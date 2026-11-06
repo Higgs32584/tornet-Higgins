@@ -13,4 +13,3 @@ select = ["I"]
 
 [tool.ruff.lint.isort]
 known-first-party = ["tornet"]
-

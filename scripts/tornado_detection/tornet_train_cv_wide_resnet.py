@@ -128,9 +128,7 @@ def build_model(
     x = ReLU()(x)
     attention_map = Conv2D(
         1, 1, activation="sigmoid", name="attention_map", use_bias=False
-    )(
-        x
-    )  # shape (B, H, W, 1)
+    )(x)  # shape (B, H, W, 1)
     attention_map = Dropout(rate=0.2, name="attention_dropout")(attention_map)
     x_weighted = Multiply()([x, attention_map])
 
@@ -428,7 +426,7 @@ if __name__ == "__main__":
         fold_config = config.copy()
         fold_config["train_years"] = fold["train_years"]
         fold_config["val_years"] = fold["val_years"]
-        fold_config["exp_name"] = f"{config['exp_name']}_fold{i+1}"
+        fold_config["exp_name"] = f"{config['exp_name']}_fold{i + 1}"
         fold_result = main(fold_config)
         results.append({"fold": i + 1, **fold_result})
 

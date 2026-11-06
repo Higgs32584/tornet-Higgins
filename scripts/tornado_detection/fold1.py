@@ -5,33 +5,35 @@ import random
 import shutil
 import sys
 from typing import List, Tuple
+
+import numpy as np
+import tensorflow as tf
 import tensorflow_datasets as tfds
 from tensorflow import keras
 from tensorflow.keras.layers import (
     Add,
     BatchNormalization,
-    LayerNormalization,
+    Concatenate,
     Conv2D,
     Dense,
-    SpatialDropout2D,
     Dropout,
     GlobalAveragePooling2D,
     GlobalMaxPooling2D,
+    LayerNormalization,
     Multiply,
-    Concatenate,
     PReLU,
     ReLU,
     Reshape,
+    SpatialDropout2D,
 )
-import tensorflow as tf
-import numpy as np
+from tensorflow.keras.regularizers import l2
+
 import tornet.data.tfds.tornet.tornet_dataset_builder
 from tornet.data.constants import ALL_VARIABLES, CHANNEL_MIN_MAX
 from tornet.data.loader import get_dataloader
 from tornet.data.preprocess import get_shape
 from tornet.metrics.keras import metrics as tfm
 from tornet.utils.general import make_exp_dir
-from tensorflow.keras.regularizers import l2
 
 logging.basicConfig(level=logging.ERROR)
 SEED = 243
@@ -414,9 +416,7 @@ def multi_dilated_attention_block(
     for i, branch in enumerate(branches):
         weight = Dense(
             filters, activation="sigmoid", name=f"{name_prefix}_dense_weight_d{i}"
-        )(
-            context
-        )  # shape: (batch, filters)
+        )(context)  # shape: (batch, filters)
         weight = Reshape((1, 1, filters), name=f"{name_prefix}_reshape_weight_d{i}")(
             weight
         )

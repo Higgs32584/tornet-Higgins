@@ -9,7 +9,7 @@ A star would be very much appreciated!
 
 This update is a bit tricky because the validation metrics and test metrics do not align. You can view the validation scores on Hugging Face.
 
-Here’s what happened: normally, I take the best-performing cross-validation model from each fold, ensemble them, and validation usually matches up to a degree with Test. But in this case, I had an average cross validation score of 0.6272, and that translated to a 0.6179 test AUCPR. But, I improved further, on cross val with a score of roughly 0.6357, but the test  AUCPR dropped to 0.60, which is odd. In this case, the cross-validation model from fold 1 performed best during cross-validation but ended up performing worse than version 8 on the test set. Granted, both models still did better than the old ensemble. 
+Here’s what happened: normally, I take the best-performing cross-validation model from each fold, ensemble them, and validation usually matches up to a degree with Test. But in this case, I had an average cross validation score of 0.6272, and that translated to a 0.6179 test AUCPR. But, I improved further, on cross val with a score of roughly 0.6357, but the test  AUCPR dropped to 0.60, which is odd. In this case, the cross-validation model from fold 1 performed best during cross-validation but ended up performing worse than version 8 on the test set. Granted, both models still did better than the old ensemble.
 As a result, I decided to create a new model:
 Version 8: the original ensemble script.
 Version 9: an ensemble of the absolute best-performing model from each fold, compiled from the various tweaks and expirements from various models, each of the best scripts for each fold are marked accordingly in the scripts.
@@ -42,7 +42,7 @@ That said, I certainly don’t want to discourage anyone from exploring differen
 
 
 
--	Experiment with standalone attention map multi-dilation or standalone convolutional block multi-dilation 
+-	Experiment with standalone attention map multi-dilation or standalone convolutional block multi-dilation
 -	Experiment with Multi-dilated Wide Residual Networks, as this may prove to be more effective than regular convolution.
 -	Experiment with hard or soft gating for the actual code for the multi-dilation convolutional code, determine if **SelectAttentionBranch** or the other version is better for prediction
 -	Experiment with the tradeoffs between SpatialDropout2D and Dropout2D
@@ -124,7 +124,7 @@ Ensemble models consistently outperform the [baseline](https://huggingface.co/to
 
 
 ![image](https://github.com/user-attachments/assets/afcb42fc-d621-46ea-9bb3-b60b1085b56b)
-- Histogram of the probabilities Predicted on the validation training set of 2013,2014 for fold 1. 
+- Histogram of the probabilities Predicted on the validation training set of 2013,2014 for fold 1.
 
 ![image](https://github.com/user-attachments/assets/b5028956-1445-4ad9-8813-2f2089b9bfef)
 -  Image of DBZ,VEL,RHOHV, along with three attention maps at dilations 1,2 and 4. the script to generate this map is in VisualizeDilations.ipynb
@@ -156,7 +156,7 @@ If you use this repository, its models, or training scripts in any academic, com
   url = {https://github.com/Higgs32584/tornet-Higgins}
 }
 ```
-## DISTRIBUTION STATEMENT 
+## DISTRIBUTION STATEMENT
 
 ### Disclosure
 ```
@@ -167,18 +167,18 @@ Copyright (c) 2025 Massachusetts Institute of Technology
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
 in the Software without restriction, including without limitation the rights
-to use, copy, modify, merge, publish, distribute, sublicense, and/or sell    
-copies of the Software, and to permit persons to whom the Software is        
-furnished to do so, subject to the following conditions:                     
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell  
+copies of the Software, and to permit persons to whom the Software is  
+furnished to do so, subject to the following conditions:  
 
-The above copyright notice and this permission notice shall be included in   
-all copies or substantial portions of the Software.                          
+The above copyright notice and this permission notice shall be included in  
+all copies or substantial portions of the Software.  
 
-THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR   
-IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,     
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR  
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,  
 FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE  
-AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER       
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER  
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
-OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN    
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN  
 THE SOFTWARE.
 ```

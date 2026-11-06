@@ -5,6 +5,7 @@ import random
 import shutil
 import sys
 from typing import List, Tuple
+
 import numpy as np
 import tensorflow as tf
 import tensorflow_datasets as tfds
@@ -22,15 +23,14 @@ from tensorflow.keras.layers import (
     ReLU,
     Reshape,
 )
-import tensorflow as tf
-import numpy as np
+from tensorflow.keras.regularizers import l2
+
 import tornet.data.tfds.tornet.tornet_dataset_builder
 from tornet.data.constants import ALL_VARIABLES, CHANNEL_MIN_MAX
 from tornet.data.loader import get_dataloader
 from tornet.data.preprocess import get_shape
 from tornet.metrics.keras import metrics as tfm
 from tornet.utils.general import make_exp_dir
-from tensorflow.keras.regularizers import l2
 
 logging.basicConfig(level=logging.ERROR)
 SEED = 1003
@@ -216,19 +216,19 @@ def se_block(x, ratio=16, kernel_initializer="glorot_uniform", name=None):
     return x
 
 
-from tensorflow.keras.layers import (
-    Conv2D,
-    BatchNormalization,
-    ReLU,
-    GlobalAveragePooling2D,
-    Dense,
-    Multiply,
-    Reshape,
-    Add,
-    Lambda,
-)
 from tensorflow.keras import backend as K
 from tensorflow.keras import regularizers
+from tensorflow.keras.layers import (
+    Add,
+    BatchNormalization,
+    Conv2D,
+    Dense,
+    GlobalAveragePooling2D,
+    Lambda,
+    Multiply,
+    ReLU,
+    Reshape,
+)
 
 
 def multi_dilated_attention_block(
@@ -623,6 +623,7 @@ if __name__ == "__main__":
         fold_result = main(fold_config)
         results.append({"fold": i + 1, **fold_result})
         import gc
+
         from tensorflow.keras import backend as K
 
         K.clear_session()
