@@ -41,7 +41,7 @@ random.seed(SEED)
 np.random.seed(SEED)
 tf.random.set_seed(SEED)
 # Environment Variables
-DATA_ROOT = os.getenv("DATA_ROOT", "/home/ubuntu/tfds")
+DATA_ROOT = os.environ.get("DATA_ROOT", "/home/ubuntu/tfds")
 TORNET_ROOT = DATA_ROOT
 TFDS_DATA_DIR = DATA_ROOT
 EXP_DIR = "."
