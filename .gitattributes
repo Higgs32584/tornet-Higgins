@@ -1,0 +1,7 @@
+# Store text files with LF in the repo regardless of OS.
+* text=auto eol=lf
+
+*.png binary
+*.pkl binary
+*.keras binary
+*.h5 binary
