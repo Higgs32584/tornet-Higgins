@@ -146,6 +146,18 @@ DATA_ROOT=/path/to/tfds python scripts/tornado_detection/test_tornado_keras_ense
 ## Downloading the Data and set up is the same as [Tornet benchmark](https://github.com/mit-ll/tornet)
 
 
+## Development
+
+Formatting (Ruff) and basic file checks run through [pre-commit](https://pre-commit.com). Set it up once:
+```bash
+pip install pre-commit
+pre-commit install
+git config blame.ignoreRevsFile .git-blame-ignore-revs
+```
+After that, the hooks run on every commit. To check the whole repo: `pre-commit run --all-files`.
+
+Run the tests with `pytest`. The smoke tests need no data. The dataset tests in `tests/test_tornet.py` run only when `TORNET_ROOT` points at the TorNet dataset. CI (GitHub Actions) runs the formatting checks and smoke tests on every push to `main` and on every pull request.
+
 ## Citation
 ```
 If you use this repository, its models, or training scripts in any academic, commercial, or public work,**you must cite the following**:
